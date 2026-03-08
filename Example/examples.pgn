@@ -1,0 +1,83 @@
+[Event "Opera Game — Morphy's Mate"]
+[White "Paul Morphy"]
+[Black "Duke of Brunswick"]
+[FEN "1Q3b1r/p4kpp/4pn2/8/8/8/PP3PPP/R1B1K2R b KQ - 0 17"]
+
+{Morphy's brilliant queen sacrifice leads to mate. 16...Nxb8 17.Rd8#} *
+
+[Event "Immortal Game — Final Attack"]
+[White "Adolf Anderssen"]
+[Black "Lionel Kieseritzky"]
+[FEN "r1bk3r/p2pBpNp/n4n2/1p6/2p5/8/PPP1NnPP/R1BqK2R w KQ - 0 21"]
+
+{Anderssen has sacrificed both rooks and the queen. Now 21.Nxg7+ Kd8 22.Qf6+ leads to 23.Be7#} *
+
+[Event "Evergreen Game — Immortal Finish"]
+[White "Adolf Anderssen"]
+[Black "Jean Dufresne"]
+[FEN "r2q1rk1/pp3ppp/2p2B2/4P3/4b3/5Q2/PPP3PP/3RK2R w K - 0 19"]
+
+{The famous queen sacrifice: 19.Rad1! Qxf3 20.Rxe7+ Nxe7 21.Qxd7+ Kxd7 22.Bf5+ Ke8 23.Bd7+ Kf8 24.Bxe7#} *
+
+[Event "Lucena Position"]
+[White "White"]
+[Black "Black"]
+[FEN "1K1k4/1P6/8/8/8/8/r7/2R5 w - - 0 1"]
+
+{Classic rook endgame technique: the Lucena position. White wins by building a bridge.} *
+
+[Event "Philidor Position"]
+[White "White"]
+[Black "Black"]
+[FEN "4k3/8/8/4K3/5R2/8/8/4r3 b - - 0 1"]
+
+{The Philidor position — a theoretical draw. Black holds with passive rook defence on the back rank.} *
+
+[Event "Sicilian Dragon — Main Line"]
+[White "White"]
+[Black "Black"]
+[FEN "r1bq1rk1/pp2ppbp/2np1np1/8/3NP3/2N1BP2/PPPQ2PP/R3KB1R w KQ - 0 9"]
+
+{Key tabiya of the Sicilian Dragon. White attacks on the kingside, Black counterattacks on the queenside.} *
+
+[Event "Ruy Lopez — Marshall Attack"]
+[White "White"]
+[Black "Black"]
+[FEN "r1bq1rk1/2p1bppp/p1n2n2/1p1pp3/3PP3/1BP2N2/PP3PPP/RNBQR1K1 b - - 0 10"]
+
+{Marshall Attack tabiya. Black sacrifices a pawn for long-term attacking chances.} *
+
+[Event "Queens Gambit Declined — Exchange Variation"]
+[White "White"]
+[Black "Black"]
+[FEN "r1bqr1k1/pp1nbppp/2p1pn2/3p4/2PP4/2NBPN2/PP3PPP/R1BQR1K1 w - - 4 9"]
+
+{A typical position in the QGD Exchange. White aims for a minority attack on the queenside.} *
+
+[Event "King's Indian — Classical Variation"]
+[White "White"]
+[Black "Black"]
+[FEN "r1bq1rk1/ppp1npbp/3p1np1/3Pp3/2P1P3/2N2N2/PP2BPPP/R1BQR1K1 b - - 0 9"]
+
+{Classical King's Indian. Black prepares f7-f5 to open the kingside against White's center.} *
+
+[Event "Endgame — Pawn Race"]
+[White "White"]
+[Black "Black"]
+[FEN "8/p7/8/8/8/8/P7/8 w - - 0 1"]
+
+{Classic pawn race. White wins because the opposition rules favour the side to move here.} *
+
+[Event "Zugzwang Study"]
+[White "White"]
+[Black "Black"]
+[FEN "8/8/p7/Pp6/1Pk5/8/3K4/8 w - - 0 1"]
+
+{A study in zugzwang. Black is in a losing position no matter whose turn it is.} *
+
+[Event "Back Rank Mate"]
+[White "White"]
+[Black "Black"]
+[FEN "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1"]
+
+{Back rank weakness. White delivers checkmate with Ra8#.} *

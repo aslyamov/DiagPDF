@@ -1,0 +1,39 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# Claude AI settings
+.claude
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
+# Auto-generated patched fonts
+Fonts/*_patch.ttf
+
+# Extra / unused font files
+Fonts/HastingsFigurine.TTF
+Fonts/LinaresFigurine.TTF
+Fonts/ZurichFigurine.TTF
+Fonts/AlphaDG.pdf
+Fonts/!Chess fonts.doc
+Fonts/Fonts-org/
+
+# User data / test input files (but allow Example folder)
+*.pgn
+!Example/*.pgn
+
+# Internal project docs (not for public repo)
+ROADMAP.md
+CLAUDE.md
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
