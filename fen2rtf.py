@@ -11,6 +11,7 @@ Usage:
 import os
 import re
 import sys
+import json
 import argparse
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,7 @@ T: dict[str, tuple] = {
     'sym_triangle':     ('Triangle',                     'Треугольник'),
     'lichess_link':     ('Lichess links',                'Ссылки Lichess'),
     'convert':          ('Generate PDF',                 'Сгенерировать PDF'),
+    'open_pdf':         ('Open PDF',                     'Открыть PDF'),
     'open_title':       ('Open chess file',              'Открыть шахматный файл'),
     'save_title':       ('Save PDF as',                  'Сохранить PDF как'),
     'open_types':       ([('Chess files', '*.pgn *.fen *.epd'), ('All files', '*.*')],
@@ -127,6 +129,7 @@ T: dict[str, tuple] = {
                          [('PDF файлы', '*.pdf'), ('Все файлы', '*.*')]),
     'err_not_found':    ('Input file not found:\n{}',    'Файл не найден:\n{}'),
     'err_unknown':      ('Unknown file type: {}',        'Неизвестный тип файла: {}'),
+    'err_no_pos':       ('No positions found in file.',  'В файле не найдено позиций.'),
     'done':             ('Done: {} position(s) \u2192 {}', 'Готово: {} позиц. \u2192 {}'),
     'error':            ('Error: {}',                    'Ошибка: {}'),
     'ready':            ('Ready.',                       'Готово.'),
@@ -251,7 +254,7 @@ def parse_pgn(content: str) -> list:
 
 def parse_fen_file(content: str) -> list:
     """Parse a .fen file containing [FEN "..."] tags and return position dicts."""
-    return [{'fen': m.group(1), 'white': '', 'black': '', 'event': '', 'moves': ''}
+    return [{'fen': m.group(1), 'white': '', 'black': '', 'event': '', 'chapter': '', 'moves': ''}
             for m in re.finditer(r'\[FEN\s+"([^"]*)"\]', content)]
 
 
@@ -277,7 +280,7 @@ def parse_epd(content: str) -> list:
             'fen': fen,
             'white': id_m.group(1).strip() if id_m else '',
             'black': bm_m.group(1).strip().rstrip(';') if bm_m else '',
-            'event': '', 'moves': '',
+            'event': '', 'chapter': '', 'moves': '',
         })
     return positions
 
@@ -325,7 +328,7 @@ _PT = 25.4 / 72   # 1 pt in mm
 
 
 
-def generate_pdf(positions: list, opts: dict, out_path) -> None:
+def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
     """Render a list of chess positions to a PDF file.
 
     Args:
@@ -482,16 +485,18 @@ def generate_pdf(positions: list, opts: dict, out_path) -> None:
         if show_hdr and header:
             pdf.set_font(_text_font, 'B', size=txt_size)
             pdf.set_xy(ML, HY - 1)
-            pdf.cell(w=USABLE_W, h=4, text=header, align='C')
-        if show_ftr:
+            pdf.cell(w=USABLE_W, h=4, text=header.replace('{page}', str(pgnum)), align='C')
+        if show_ftr and footer:
             pdf.set_font(_text_font, size=txt_size)
             pdf.set_xy(ML, PH - FY - 1)
-            foot = f'{footer} {pgnum}'.strip() if footer else str(pgnum)
-            pdf.cell(w=USABLE_W, h=4, text=foot, align='C')
+            pdf.cell(w=USABLE_W, h=4, text=footer.replace('{page}', str(pgnum)), align='C')
 
     valid = [p for p in positions if p.get('fen', '').strip()]
 
+    total = len(valid)
     for pos_idx, pos in enumerate(valid):
+        if progress and total > 0:
+            progress(int((pos_idx + 1) * 100 / total))
         slot = pos_idx % per_page
         if slot == 0:
             pgnum += 1
@@ -580,6 +585,21 @@ def generate_pdf(positions: list, opts: dict, out_path) -> None:
 # GUI
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CONFIG_PATH = Path.home() / '.diagpdf.json'
+
+def _load_config() -> dict:
+    try:
+        return json.loads(_CONFIG_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+def _save_config(data: dict) -> None:
+    try:
+        _CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
 def run_gui():
     try:
         import tkinter as tk
@@ -588,7 +608,8 @@ def run_gui():
         print('tkinter not available. Use command-line mode.', file=sys.stderr)
         sys.exit(1)
 
-    lang = ['en']
+    cfg  = _load_config()
+    lang = [cfg.get('lang', 'en')]
 
     # ── Colour palette ─────────────────────────────────────────────────────────
     BG     = '#F0F4F8'
@@ -648,20 +669,20 @@ def run_gui():
     # ── Variables ──────────────────────────────────────────────────────────────
     v_input       = tk.StringVar()
     v_output      = tk.StringVar()
-    v_layout      = tk.IntVar(value=DEFAULT_LAYOUT)
-    v_font        = tk.StringVar(value=FONT_NAMES[0])
-    v_coords      = tk.BooleanVar(value=True)
-    v_orient      = tk.StringVar(value='auto')   # 'auto' / 'white' / 'black'
-    v_header      = tk.StringVar()
-    v_footer      = tk.StringVar(value='')
-    v_sh_hdr      = tk.BooleanVar(value=True)
-    v_sh_ftr      = tk.BooleanVar(value=True)
-    v_symbol      = tk.StringVar(value='square')
-    v_lines_count = tk.IntVar(value=0)
-    v_lines_mode  = tk.StringVar(value='plain')
-    v_title_mode  = tk.StringVar(value='comment')   # 'number' | 'comment' | 'custom'
-    v_title_custom = tk.StringVar()
-    v_lichess     = tk.BooleanVar(value=False)
+    v_layout      = tk.IntVar(value=cfg.get('layout', DEFAULT_LAYOUT))
+    v_font        = tk.StringVar(value=cfg.get('font', FONT_NAMES[0]))
+    v_coords      = tk.BooleanVar(value=cfg.get('coords', True))
+    v_orient      = tk.StringVar(value=cfg.get('orient', 'auto'))
+    v_header      = tk.StringVar(value=cfg.get('header', ''))
+    v_footer      = tk.StringVar(value=cfg.get('footer', '{page}'))
+    v_sh_hdr      = tk.BooleanVar(value=cfg.get('show_header', True))
+    v_sh_ftr      = tk.BooleanVar(value=cfg.get('show_footer', True))
+    v_symbol      = tk.StringVar(value=cfg.get('symbol', 'square'))
+    v_lines_count = tk.IntVar(value=cfg.get('lines_count', 0))
+    v_lines_mode  = tk.StringVar(value=cfg.get('lines_mode', 'plain'))
+    v_title_mode  = tk.StringVar(value=cfg.get('title_mode', 'comment'))
+    v_title_custom = tk.StringVar(value=cfg.get('title_custom', ''))
+    v_lichess     = tk.BooleanVar(value=cfg.get('lichess', False))
     v_status      = tk.StringVar(value='')
 
     widgets: dict[str, Any] = {}
@@ -672,9 +693,23 @@ def run_gui():
             return key
         return entry[0] if lang[0] == 'en' else entry[1]
 
+    _last_pdf:     list[Path] = [Path()]
+    _generated:    list[bool] = [False]   # True after successful generation
+
     def set_status(msg: str, ok: bool = True) -> None:
         v_status.set(msg)
         status_lbl.config(foreground=OK if ok else ERR)
+
+    def on_setting_change(*_) -> None:
+        if _generated[0]:
+            _generated[0] = False
+            set_status(t('ready'))
+
+    def open_last_pdf() -> None:
+        import subprocess
+        p = _last_pdf[0]
+        if p.exists():
+            subprocess.Popen(['start', '', str(p)], shell=True)
 
     root.title('DiagPDF')
 
@@ -730,12 +765,15 @@ def run_gui():
             else:
                 messagebox.showerror('Error', t('err_unknown').format(ext))
                 return
+            if not positions:
+                messagebox.showerror('Error', t('err_no_pos'))
+                return
             orient = v_orient.get()
             opts = {
                 'layout_idx':  v_layout.get(),
                 'font':        v_font.get(),
                 'font_size':   0,
-                'text_size':   10,
+                'text_size':   0,
                 'coords':      v_coords.get(),
                 'flip':        orient == 'black',
                 'flip_auto':   orient == 'auto',
@@ -750,7 +788,13 @@ def run_gui():
                 'title_custom': v_title_custom.get(),
                 'lichess_link': v_lichess.get(),
             }
-            generate_pdf(positions, opts, out_path)
+            def on_progress(pct: int) -> None:
+                set_status(f'{pct}%')
+                root.update()
+            generate_pdf(positions, opts, out_path, progress=on_progress)
+            _last_pdf[0] = out_path
+            _generated[0] = True
+            widgets['open_pdf'].config(state='normal')
             set_status(t('done').format(len(positions), out_path.name))
         except Exception as e:
             messagebox.showerror('Error', str(e))
@@ -922,17 +966,54 @@ def run_gui():
     btn_fr = ttk.Frame(main)
     btn_fr.pack()
     conv_btn = ttk.Button(btn_fr, command=convert, style='Accent.TButton', state='disabled')
-    conv_btn.pack(ipadx=8, ipady=2)
+    conv_btn.pack(side='left', ipadx=8, ipady=2)
     widgets['convert'] = conv_btn
+    open_btn = ttk.Button(btn_fr, command=open_last_pdf, state='disabled')
+    open_btn.pack(side='left', padx=(8, 0), ipadx=8, ipady=2)
+    widgets['open_pdf'] = open_btn
 
     # ── Status bar ─────────────────────────────────────────────────────────────
     status_lbl = ttk.Label(main, textvariable=v_status, font=(F, 8), foreground=FG2)
     status_lbl.pack(pady=(6, 0))
 
+    def on_close() -> None:
+        _save_config({
+            'lang':         lang[0],
+            'layout':       v_layout.get(),
+            'font':         v_font.get(),
+            'coords':       v_coords.get(),
+            'orient':       v_orient.get(),
+            'header':       v_header.get(),
+            'footer':       v_footer.get(),
+            'show_header':  v_sh_hdr.get(),
+            'show_footer':  v_sh_ftr.get(),
+            'symbol':       v_symbol.get(),
+            'lines_count':  v_lines_count.get(),
+            'lines_mode':   v_lines_mode.get(),
+            'title_mode':   v_title_mode.get(),
+            'title_custom': v_title_custom.get(),
+            'lichess':      v_lichess.get(),
+        })
+        root.destroy()
+
     v_input.trace_add('write', update_btn_state)
+    for _sv in (v_layout, v_font, v_coords, v_orient, v_header, v_footer,
+                v_sh_hdr, v_sh_ftr, v_symbol, v_lines_count, v_lines_mode,
+                v_title_mode, v_title_custom, v_lichess):
+        _sv.trace_add('write', on_setting_change)
+    root.protocol('WM_DELETE_WINDOW', on_close)
+    # Measure both languages and fix window to the larger size
+    # so that toggling language never resizes the window.
     apply_lang()
     root.update_idletasks()
-    root.geometry(f'{root.winfo_reqwidth()}x{root.winfo_reqheight()}')
+    _w, _h = root.winfo_reqwidth(), root.winfo_reqheight()
+    toggle_lang()
+    root.update_idletasks()
+    _w = max(_w, root.winfo_reqwidth())
+    _h = max(_h, root.winfo_reqheight())
+    toggle_lang()   # restore original language
+    root.geometry(f'{_w}x{_h}')
+    root.resizable(False, False)
     root.mainloop()
 
 
@@ -1009,12 +1090,12 @@ def main():
         'layout_idx':  max(0, min(args.layout, len(LAYOUTS) - 1)),
         'font':        args.font,
         'font_size':   0,
-        'text_size':   10,
+        'text_size':   0,
         'coords':      not args.no_coords,
         'flip':        args.flip,
         'flip_auto':   not args.no_auto_flip,
         'header':      args.header or in_path.stem,
-        'footer':      args.footer,
+        'footer':      args.footer or '{page}',
         'show_header': not args.no_header,
         'show_footer': not args.no_footer,
         'symbol':      args.symbol,

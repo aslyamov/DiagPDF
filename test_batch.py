@@ -119,18 +119,20 @@ def run_batch(input_path: Path, out_dir: Path) -> None:
             'layout_idx':  cfg['layout_idx'],
             'font':        cfg['font'],
             'font_size':   0,
-            'text_size':   10,
+            'text_size':   0,
             'coords':      cfg['coords'],
             'flip':        orient == 'black',
             'flip_auto':   orient == 'auto',
             'header':      stem,
-            'footer':      '',
+            'footer':      '{page}',
             'show_header': True,
             'show_footer': True,
-            'show_moves':  False,
             'symbol':      cfg['symbol'],
             'lines_count': lines_n,
             'lines_mode':  mode,
+            'title_mode':  'comment',
+            'title_custom': '',
+            'lichess_link': False,
         }
 
         try:
