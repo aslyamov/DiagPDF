@@ -836,9 +836,9 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
     # visually when we first blank the area with a white rectangle.
     if pgnum > 0 and ('{total}' in header or '{total}' in footer):
         _saved_page = pdf.page
-        pdf.set_fill_color(255, 255, 255)
         for _pn in range(1, pgnum + 1):
             pdf.page = _pn
+            pdf.set_fill_color(255, 255, 255)
             _chap = _page_chapters.get(_pn, '')
             _pg_s = str(_pn)
             _tot_s = str(pgnum)
@@ -1371,8 +1371,19 @@ def main():
                         help='Prefix notation lines with move numbers')
     parser.add_argument('--title-template', default='',
                         help='Title template, e.g. "{number} {comment}" (vars: number, event, white, black, date, comment)')
+    parser.add_argument('--font-size', type=int, default=0,
+                        help='Board font size in pt (0 = auto)')
     parser.add_argument('--lichess-link', action='store_true',
                         help='Embed clickable Lichess analysis links in position titles')
+    parser.add_argument('--answers', action='store_true',
+                        help='Append answers section at the end of the document')
+    parser.add_argument('--answers-title', default='Solutions',
+                        help='Heading for the answers section (default: Solutions)')
+    parser.add_argument('--answers-cols', type=int, default=1, choices=[1, 2],
+                        help='Columns in the answers section (1 or 2, default: 1)')
+    parser.add_argument('--figurine-font', default='Zurich',
+                        choices=FIGURINE_NAMES if FIGURINE_NAMES else ['Zurich'],
+                        help='Figurine font for piece symbols in answers (default: Zurich)')
     parser.add_argument('--gui', action='store_true', help='Launch GUI')
 
     args = parser.parse_args()
@@ -1425,6 +1436,10 @@ def main():
         'lines_mode':   'numbered' if args.lines_numbered else 'plain',
         'title_template': args.title_template or '{number} {comment}',
         'lichess_link': args.lichess_link,
+        'answers_section': args.answers,
+        'answers_title':   args.answers_title,
+        'answers_cols':    args.answers_cols,
+        'figurine_font':   args.figurine_font,
     }
 
     try:
