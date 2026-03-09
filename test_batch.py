@@ -96,6 +96,15 @@ def run_batch(input_path: Path, out_dir: Path) -> None:
         symbol='square', coords=False, lines_count=2, lines_mode='numbered',
     ))
 
+    # ── Phase 5.3: Answers section
+    for fig_font in ('Hastings', 'Zurich', 'Linares'):
+        tests.append(dict(
+            group='P5_answers',
+            font='AlphaDG', layout_idx=2, orient='auto',
+            symbol='square', coords=True, lines_count=0, lines_mode='plain',
+            answers_section=True, answers_title='Solutions', figurine_font=fig_font,
+        ))
+
     total = len(tests)
     print(f'Generating {total} PDFs into: {out_dir}')
 
@@ -116,23 +125,25 @@ def run_batch(input_path: Path, out_dir: Path) -> None:
         out_path = out_dir / name
 
         opts = {
-            'layout_idx':  cfg['layout_idx'],
-            'font':        cfg['font'],
-            'font_size':   0,
-            'text_size':   0,
-            'coords':      cfg['coords'],
-            'flip':        orient == 'black',
-            'flip_auto':   orient == 'auto',
-            'header':      stem,
-            'footer':      '{page}',
-            'show_header': True,
-            'show_footer': True,
-            'symbol':      cfg['symbol'],
-            'lines_count': lines_n,
-            'lines_mode':  mode,
-            'title_mode':  'comment',
-            'title_custom': '',
-            'lichess_link': False,
+            'layout_idx':      cfg['layout_idx'],
+            'font':            cfg['font'],
+            'font_size':       0,
+            'text_size':       0,
+            'coords':          cfg['coords'],
+            'flip':            orient == 'black',
+            'flip_auto':       orient == 'auto',
+            'header':          stem,
+            'footer':          '{page}',
+            'show_header':     True,
+            'show_footer':     True,
+            'symbol':          cfg['symbol'],
+            'lines_count':     lines_n,
+            'lines_mode':      mode,
+            'title_template':  '{number} {comment}',
+            'lichess_link':    False,
+            'answers_section': cfg.get('answers_section', False),
+            'answers_title':   cfg.get('answers_title', 'Solutions'),
+            'figurine_font':   cfg.get('figurine_font', 'Hastings'),
         }
 
         try:

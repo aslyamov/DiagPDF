@@ -8,6 +8,8 @@ Usage:
     python fen2rtf.py --gui
 """
 
+__version__ = '0.2.0'
+
 import os
 import re
 import sys
@@ -15,6 +17,16 @@ import json
 import argparse
 from pathlib import Path
 from typing import Any
+
+
+def _resource(rel: str) -> Path:
+    """Return absolute path to a bundled resource.
+
+    Works both when running from source (relative to this file)
+    and when frozen by PyInstaller (via sys._MEIPASS).
+    """
+    base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+    return base / rel
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chess Alpha DG character mapping
@@ -85,6 +97,18 @@ FONT_FILES: dict[str, str] = {
 }
 FONT_NAMES = list(FONT_FILES.keys())
 
+# Figurine fonts for the answers section (piece letters only, standard ASCII)
+# Encoding: K/Q/R/B/N/P = white pieces (uppercase), k/q/r/b/n/p = black (lowercase)
+# In move notation we only render uppercase piece initials (K Q R B N).
+FIGURINE_FILES: dict[str, str] = {
+    'Hastings': 'HastingsFigurine.TTF',
+    'Zurich':   'ZurichFigurine.TTF',
+    'Linares':  'LinaresFigurine.TTF',
+}
+FIGURINE_NAMES = list(FIGURINE_FILES.keys())
+# Letters in SAN move text that should be drawn with the figurine font
+FIGURINE_PIECE_CHARS = frozenset('KQRBN')
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Localization strings
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,14 +135,35 @@ T: dict[str, tuple] = {
     'orient_white':     ('White \u2193',                 'Белые \u2193'),
     'orient_black':     ('Black \u2193',                 'Чёрные \u2193'),
     'coords':           ('Show coordinates',             'Показать координаты'),
-    'title_source':     ('Title:',                       'Заголовок:'),
-    'title_number':     ('Number',                       'Номер'),
-    'title_comment':    ('PGN comment',                  'Коммент. PGN'),
-    'title_custom_lbl': ('Custom:',                      'Свой текст:'),
+    'title_source':     ('Title template:',               'Шаблон заголовка:'),
+    'tpl_help_title':   ('Title template variables',     'Переменные шаблона заголовка'),
+    'tpl_help_body':    (
+        '{number}  — diagram number          e.g.  42\n'
+        '{event}   — [Event "…"] tag         e.g.  Hastings 1895\n'
+        '{white}   — [White "…"] tag         e.g.  Steinitz, W.\n'
+        '{black}   — [Black "…"] tag         e.g.  Lasker, Em.\n'
+        '{date}    — [Date "…"] tag          e.g.  1895.01.03\n'
+        '{comment} — first comment in game   e.g.  White to move and win\n\n'
+        'Example:  {number}. {event} ({date})\n'
+        '→  42. Hastings 1895 (1895.01.03)',
+        '{number}  — номер диаграммы         напр.  42\n'
+        '{event}   — тег [Event "…"]         напр.  Гастингс 1895\n'
+        '{white}   — тег [White "…"]         напр.  Steinitz, W.\n'
+        '{black}   — тег [Black "…"]         напр.  Lasker, Em.\n'
+        '{date}    — тег [Date "…"]          напр.  1895.01.03\n'
+        '{comment} — первый коммент. партии  напр.  Белые ходят и выигрывают\n\n'
+        'Пример:  {number}. {event} ({date})\n'
+        '→  42. Гастингс 1895 (1895.01.03)'
+    ),
     'sym_square':       ('Square',                       'Квадрат'),
     'sym_circle':       ('Circle',                       'Круг'),
     'sym_triangle':     ('Triangle',                     'Треугольник'),
+    'font_size_lbl':    ('Board font size (0=auto)',      'Размер шрифта доски (0=авто)'),
     'lichess_link':     ('Lichess links',                'Ссылки Lichess'),
+    'answers_section':  ('Add answers section',          'Добавить раздел ответов'),
+    'answers_title_lbl':('Answers heading',              'Заголовок раздела ответов'),
+    'answers_cols_lbl': ('Answer columns',               'Колонок ответов'),
+    'figurine_font_lbl':('Figurine font',                'Шрифт фигур'),
     'convert':          ('Generate PDF',                 'Сгенерировать PDF'),
     'open_pdf':         ('Open PDF',                     'Открыть PDF'),
     'open_title':       ('Open chess file',              'Открыть шахматный файл'),
@@ -219,6 +264,52 @@ def _first_text_comment(moves_raw: str) -> str:
     return ''
 
 
+def _clean_moves(moves_raw: str) -> str:
+    """Extract clean move text from a raw PGN game body.
+
+    Removes {comments}, NAG glyphs ($1, !?, etc.) and result tokens.
+    Preserves move numbers, moves, and parenthesised variations.
+
+    Example input:
+        1. Qxd8+ {тактический удар} $1 Kxd8 2. Ne4+ Kc8 (2... Ke8 3. Rb8#) 3. Rd8# 1-0
+    Example output:
+        1. Qxd8+ Kxd8 2. Ne4+ Kc8 (2... Ke8 3. Rb8#) 3. Rd8#
+    """
+    # Strip {comments} (including multi-line)
+    text = re.sub(r'\{[^}]*\}', ' ', moves_raw)
+    # Strip NAG codes ($1 .. $255)
+    text = re.sub(r'\$\d+', '', text)
+    # Strip annotation glyphs (!, ?, !!, ??, !?, ?!)
+    text = re.sub(r'[!?]+', '', text)
+    # Strip result tokens
+    text = re.sub(r'\b(1-0|0-1|1/2-1/2|\*)\s*$', '', text.rstrip())
+    # Normalize whitespace (but keep structure intact)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\(\s+', '(', text)
+    text = re.sub(r'\s+\)', ')', text)
+    return text.strip()
+
+
+def _apply_title_template(template: str, pos: dict, num: int) -> str:
+    """Expand a title template with position metadata.
+
+    Variables: {number}, {event}, {white}, {black}, {date}, {comment}.
+    Empty substitutions collapse surrounding whitespace automatically.
+    """
+    vals = {
+        'number':  str(num),
+        'event':   pos.get('event', ''),
+        'white':   pos.get('white', ''),
+        'black':   pos.get('black', ''),
+        'date':    pos.get('date', ''),
+        'comment': pos.get('comment', '').strip(),
+    }
+    result = template
+    for key, val in vals.items():
+        result = result.replace(f'{{{key}}}', val)
+    return ' '.join(result.split())   # collapse whitespace from empty substitutions
+
+
 def parse_pgn(content: str) -> list:
     """Parse a PGN file and return a list of position dicts.
 
@@ -245,7 +336,8 @@ def parse_pgn(content: str) -> list:
             'white':   tags.get('White', ''),
             'black':   tags.get('Black', ''),
             'event':   tags.get('Event', ''),
-            'chapter': tags.get('ChapterName', ''),
+            'date':    tags.get('Date', ''),
+            'chapter': tags.get('Chapter', ''),
             'comment': _first_text_comment(moves_raw),
             'moves':   moves_raw,
         })
@@ -372,11 +464,16 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
     font_name    = opts.get('font', 'AlphaDG')
     lines_count  = int(opts.get('lines_count', 0))
     lines_mode   = opts.get('lines_mode', 'plain')
-    title_mode   = opts.get('title_mode', 'comment')   # 'number' | 'comment' | 'custom'
-    title_custom = opts.get('title_custom', '')
-    lichess_link = opts.get('lichess_link', False)
+    title_template  = opts.get('title_template', '')     # e.g. '{number} {comment}'
+    title_mode      = opts.get('title_mode', 'comment') # legacy fallback
+    title_custom    = opts.get('title_custom', '')       # legacy fallback
+    lichess_link    = opts.get('lichess_link', False)
+    answers_section = opts.get('answers_section', False)
+    figurine_font   = opts.get('figurine_font', 'Zurich' if 'Zurich' in FIGURINE_NAMES else (FIGURINE_NAMES[0] if FIGURINE_NAMES else ''))
+    answers_title   = opts.get('answers_title', 'Solutions')
+    answers_cols    = min(max(1, int(opts.get('answers_cols', 1))), 2)
 
-    script_dir = Path(__file__).parent
+    script_dir = _resource('.')   # works in both .py and frozen .exe
     chess_path = get_chess_font_path(font_name, script_dir / 'Fonts')
 
     # Page geometry (mm, A4)
@@ -479,29 +576,68 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
             pass
         break
 
+    # Load figurine font for answers section (fallback = text font)
+    _fig_font_name = _text_font
+    if answers_section and FIGURINE_NAMES:
+        _fig_fname = FIGURINE_FILES.get(figurine_font, next(iter(FIGURINE_FILES.values())))
+        _fig_path  = script_dir / 'Fonts' / _fig_fname
+        if _fig_path.exists():
+            try:
+                pdf.add_font('Figurine', fname=str(_fig_path))
+                _fig_font_name = 'Figurine'
+            except Exception as _e:
+                print(f'Figurine font load failed ({_fig_path.name}): {_e}', file=sys.stderr)
+
     pgnum = 0
 
-    def draw_decorations() -> None:
+    def draw_decorations(chapter: str = '') -> None:
         if show_hdr and header:
+            txt = header.replace('{chapter}', chapter).replace('{page}', str(pgnum))
             pdf.set_font(_text_font, 'B', size=txt_size)
             pdf.set_xy(ML, HY - 1)
-            pdf.cell(w=USABLE_W, h=4, text=header.replace('{page}', str(pgnum)), align='C')
+            pdf.cell(w=USABLE_W, h=4, text=txt, align='C')
         if show_ftr and footer:
+            txt = footer.replace('{chapter}', chapter).replace('{page}', str(pgnum))
             pdf.set_font(_text_font, size=txt_size)
             pdf.set_xy(ML, PH - FY - 1)
-            pdf.cell(w=USABLE_W, h=4, text=footer.replace('{page}', str(pgnum)), align='C')
+            pdf.cell(w=USABLE_W, h=4, text=txt, align='C')
 
     valid = [p for p in positions if p.get('fen', '').strip()]
 
+    # Pre-create link IDs so both directions (diag→ans, ans→diag) can reference each other.
+    # ans_links[i] == 0 means the position has no moves → no link created.
+    # fpdf2 raises ValueError if pdf.cell(link=id) is called before pdf.set_link(id, page, y),
+    # so we assign a placeholder (page=1) immediately; the answers section overwrites with real page.
+    diag_links: list[int] = []
+    ans_links:  list[int] = []
+    if answers_section:
+        for _p in valid:
+            diag_links.append(pdf.add_link())
+            _al = pdf.add_link() if _clean_moves(_p.get('moves', '')) else 0
+            if _al:
+                pdf.set_link(_al, page=1, y=0)   # placeholder; updated in answers section
+            ans_links.append(_al)
+
     total = len(valid)
+    slot = 0
+    current_chapter = ''
+    _page_chapters: dict[int, str] = {}   # pgnum → chapter name (for {total} re-render)
+
     for pos_idx, pos in enumerate(valid):
         if progress and total > 0:
             progress(int((pos_idx + 1) * 100 / total))
-        slot = pos_idx % per_page
+
+        pos_chapter = pos.get('chapter', '')
+        if pos_chapter and pos_chapter != current_chapter:
+            current_chapter = pos_chapter
+            if pos_idx > 0:
+                slot = 0   # force page break on chapter change
+
         if slot == 0:
             pgnum += 1
+            _page_chapters[pgnum] = current_chapter
             pdf.add_page()
-            draw_decorations()
+            draw_decorations(current_chapter)
 
         col_idx = slot % cols
         row_idx = slot // cols
@@ -511,13 +647,16 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
         # ── Title (above diagram) ─────────────────────────────────────────────
         fen     = pos.get('fen', '').strip()
         num     = pos_idx + 1
-        comment = pos.get('comment', '').strip()
-        if title_mode == 'number':
-            title = str(num)
-        elif title_mode == 'custom':
-            title = f'{num} {title_custom}' if title_custom else str(num)
-        else:  # 'comment'
-            title = f'{num} {comment}' if comment else str(num)
+        if title_template:
+            title = _apply_title_template(title_template, pos, num)
+        else:
+            comment = pos.get('comment', '').strip()
+            if title_mode == 'number':
+                title = str(num)
+            elif title_mode == 'custom':
+                title = f'{num} {title_custom}' if title_custom else str(num)
+            else:  # 'comment'
+                title = f'{num} {comment}' if comment else str(num)
 
         link_url = ''
         if lichess_link:
@@ -527,6 +666,10 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
 
         y_diag = y   # board at row top; title embeds in top border row
 
+        # Set diagram anchor (for links from answers section back to this diagram)
+        if diag_links:
+            pdf.set_link(diag_links[pos_idx], page=pgnum, y=y_diag)
+
         # ── Diagram ───────────────────────────────────────────────────────────
         try:
             diag_lines = fen_to_diagram(fen, coords=coords, flip=flip,
@@ -535,16 +678,24 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
             for i, ln in enumerate(diag_lines):
                 pdf.set_xy(x, y_diag + i * fmm)
                 pdf.cell(w=diag_w, h=fmm, text=chess_str(ln))
+            # Lichess link overlaid on the side-to-move symbol (right border, visual bottom rank).
+            # The symbol is always in diag_lines[8] (last rank row before bottom border).
+            if lichess_link and link_url:
+                pdf.link(x=x + diag_w - char_w, y=y_diag + 8 * fmm,
+                         w=char_w, h=fmm, link=link_url)
         except Exception:
             pdf.set_font(_text_font, size=8)
             pdf.set_xy(x, y_diag)
             pdf.cell(w=diag_w, h=5, text='[FEN error]')
 
         # ── Title (centered in top border row, over inner 8 squares) ─────────
+        # When answers section is active: title links to answer; Lichess goes on symbol.
+        # When no answers section: title links to Lichess (if enabled).
+        _title_link: int | str = ans_links[pos_idx] if ans_links else link_url
         title_cy = y_diag + (fmm - title_lh) / 2 + lay[7]
         pdf.set_font(_text_font, 'B', size=txt_size)
         pdf.set_xy(x + char_w, title_cy)
-        pdf.cell(w=inner_w, h=title_lh, text=title, align='C', link=link_url)
+        pdf.cell(w=inner_w, h=title_lh, text=title, align='C', link=_title_link)
 
         # ── Notation lines ───────────────────────────────────────────────────
         if lines_count > 0:
@@ -576,8 +727,135 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
                     # plain mode: single full-width line
                     pdf.line(lx, ly, lx + inner_w, ly)
 
+        slot += 1
+        if slot >= per_page:
+            slot = 0
+
     if pgnum == 0:
         pdf.add_page()
+
+    # ── Answers section ───────────────────────────────────────────────────────
+    if answers_section and any(_clean_moves(v.get('moves', '')) for v in valid):
+        _ans_fsize = txt_size
+        _ans_lh    = title_lh + 0.5   # slightly taller line height
+        _col_w     = USABLE_W / answers_cols
+
+        def _ans_col_x(ci: int) -> float:
+            return ML + ci * _col_w
+
+        def _set_ans_margins(ci: int) -> None:
+            pdf.set_left_margin(_ans_col_x(ci))
+            pdf.set_right_margin(PW - (_ans_col_x(ci) + _col_w))
+
+        # Section heading text — also used as {chapter} on all answers pages
+        _head = answers_title.strip() or 'Solutions'
+
+        def _ans_new_page() -> None:
+            nonlocal pgnum
+            pgnum += 1
+            _page_chapters[pgnum] = _head
+            pdf.add_page()
+            draw_decorations(_head)
+            pdf.set_y(MT)
+
+        pgnum += 1
+        _page_chapters[pgnum] = _head
+        pdf.add_page()
+        draw_decorations(_head)
+        pdf.set_font(_text_font, 'B', size=_ans_fsize + 2)
+        pdf.set_xy(ML, MT)
+        pdf.cell(w=USABLE_W, h=_ans_lh + 2, text=_head, align='C', new_x='LMARGIN', new_y='NEXT')
+        pdf.ln(3)
+
+        _cur_col   = 0
+        _col_top_y = pdf.get_y()   # content start Y (after heading on first page)
+        _set_ans_margins(_cur_col)
+
+        for _ai, _pos in enumerate(valid):
+            _moves_raw = _pos.get('moves', '').strip()
+            if not _moves_raw:
+                continue
+            _moves = _clean_moves(_moves_raw)
+            if not _moves:
+                continue
+
+            # Column/page overflow: need at least 2 line heights remaining
+            if pdf.get_y() > PH - MT - _ans_lh * 2:
+                if answers_cols > 1 and _cur_col == 0:
+                    # Switch to right column on the same page
+                    _cur_col = 1
+                    _set_ans_margins(_cur_col)
+                    pdf.set_y(_col_top_y)
+                else:
+                    # Start a new page, back to left column
+                    _ans_new_page()
+                    _cur_col = 0
+                    _col_top_y = MT
+                    _set_ans_margins(_cur_col)
+
+            # Set answer anchor (links from diagram titles point here)
+            if ans_links:
+                pdf.set_link(ans_links[_ai], page=pgnum, y=pdf.get_y())
+
+            # Number label — bold, links back to diagram
+            _num_label = f'{_ai + 1}. '
+            _diag_link: int | str = diag_links[_ai] if diag_links else ''
+            pdf.set_font(_text_font, 'B', size=_ans_fsize)
+            _nl_w = pdf.get_string_width(_num_label) + 1.0
+            pdf.set_x(_ans_col_x(_cur_col))
+            pdf.cell(w=_nl_w, h=_ans_lh, text=_num_label, link=_diag_link)
+
+            # Moves text — build segments, switching to figurine font for piece letters
+            _segs: list[tuple[str, str]] = []
+            _cur_font = _text_font
+            _buf = ''
+            for _ch in _moves:
+                _want = _fig_font_name if _ch in FIGURINE_PIECE_CHARS else _text_font
+                if _want != _cur_font:
+                    if _buf:
+                        _segs.append((_cur_font, _buf))
+                    _buf = _ch
+                    _cur_font = _want
+                else:
+                    _buf += _ch
+            if _buf:
+                _segs.append((_cur_font, _buf))
+
+            for _seg_font, _seg_text in _segs:
+                pdf.set_font(_seg_font, size=_ans_fsize)
+                pdf.write(h=_ans_lh, text=_seg_text)
+
+            pdf.ln(_ans_lh)
+
+        # Restore page margins
+        pdf.set_left_margin(ML)
+        pdf.set_right_margin(MR)
+
+    # ── Re-render headers/footers with {total} resolved ──────────────────────
+    # fpdf2 appends to page streams, so drawing over existing content replaces it
+    # visually when we first blank the area with a white rectangle.
+    if pgnum > 0 and ('{total}' in header or '{total}' in footer):
+        _saved_page = pdf.page
+        pdf.set_fill_color(255, 255, 255)
+        for _pn in range(1, pgnum + 1):
+            pdf.page = _pn
+            _chap = _page_chapters.get(_pn, '')
+            _pg_s = str(_pn)
+            _tot_s = str(pgnum)
+            if show_hdr and header and '{total}' in header:
+                pdf.rect(ML, HY - 2, USABLE_W, 6, style='F')
+                txt = header.replace('{chapter}', _chap).replace('{page}', _pg_s).replace('{total}', _tot_s)
+                pdf.set_font(_text_font, 'B', size=txt_size)
+                pdf.set_xy(ML, HY - 1)
+                pdf.cell(w=USABLE_W, h=4, text=txt, align='C')
+            if show_ftr and footer and '{total}' in footer:
+                pdf.rect(ML, PH - FY - 2, USABLE_W, 6, style='F')
+                txt = footer.replace('{chapter}', _chap).replace('{page}', _pg_s).replace('{total}', _tot_s)
+                pdf.set_font(_text_font, size=txt_size)
+                pdf.set_xy(ML, PH - FY - 1)
+                pdf.cell(w=USABLE_W, h=4, text=txt, align='C')
+        pdf.page = _saved_page
+
     pdf.output(str(out_path))
 
 
@@ -680,10 +958,14 @@ def run_gui():
     v_symbol      = tk.StringVar(value=cfg.get('symbol', 'square'))
     v_lines_count = tk.IntVar(value=cfg.get('lines_count', 0))
     v_lines_mode  = tk.StringVar(value=cfg.get('lines_mode', 'plain'))
-    v_title_mode  = tk.StringVar(value=cfg.get('title_mode', 'comment'))
-    v_title_custom = tk.StringVar(value=cfg.get('title_custom', ''))
-    v_lichess     = tk.BooleanVar(value=cfg.get('lichess', False))
-    v_status      = tk.StringVar(value='')
+    v_font_size   = tk.IntVar(value=cfg.get('font_size', 0))
+    v_title_template = tk.StringVar(value=cfg.get('title_template', '{number} {comment}'))
+    v_lichess       = tk.BooleanVar(value=cfg.get('lichess', False))
+    v_answers       = tk.BooleanVar(value=cfg.get('answers_section', False))
+    v_answers_title = tk.StringVar(value=cfg.get('answers_title', 'Solutions'))
+    v_answers_cols  = tk.IntVar(value=cfg.get('answers_cols', 1))
+    v_fig_font      = tk.StringVar(value=cfg.get('figurine_font', 'Zurich' if 'Zurich' in FIGURINE_NAMES else (FIGURINE_NAMES[0] if FIGURINE_NAMES else '')))
+    v_status        = tk.StringVar(value='')
 
     widgets: dict[str, Any] = {}
 
@@ -711,7 +993,13 @@ def run_gui():
         if p.exists():
             subprocess.Popen(['start', '', str(p)], shell=True)
 
-    root.title('DiagPDF')
+    root.title(f'DiagPDF {__version__}')
+    _ico = _resource('icon.ico')
+    if _ico.exists():
+        try:
+            root.iconbitmap(str(_ico))
+        except Exception:
+            pass
 
     def apply_lang() -> None:
         for key, w in widgets.items():
@@ -735,10 +1023,14 @@ def run_gui():
     def browse_input() -> None:
         f = filedialog.askopenfilename(title=t('open_title'), filetypes=t('open_types'))
         if f:
-            v_input.set(f)
+            v_input.set(str(Path(f)))
             v_output.set(str(Path(f).with_suffix('.pdf')))
-            if not v_header.get():
-                v_header.set(Path(f).stem)
+            try:
+                _content = Path(f).read_text(encoding='utf-8-sig', errors='replace')
+                _has_ch = bool(re.search(r'^\[Chapter\s+"[^"]+"\]', _content, re.MULTILINE))
+            except Exception:
+                _has_ch = False
+            v_header.set('{chapter}' if _has_ch else Path(f).stem)
 
     def browse_output() -> None:
         f = filedialog.asksaveasfilename(title=t('save_title'), defaultextension='.pdf',
@@ -772,7 +1064,7 @@ def run_gui():
             opts = {
                 'layout_idx':  v_layout.get(),
                 'font':        v_font.get(),
-                'font_size':   0,
+                'font_size':   v_font_size.get(),
                 'text_size':   0,
                 'coords':      v_coords.get(),
                 'flip':        orient == 'black',
@@ -784,9 +1076,12 @@ def run_gui():
                 'symbol':       v_symbol.get(),
                 'lines_count':  v_lines_count.get(),
                 'lines_mode':   v_lines_mode.get(),
-                'title_mode':   v_title_mode.get(),
-                'title_custom': v_title_custom.get(),
-                'lichess_link': v_lichess.get(),
+                'title_template':  v_title_template.get(),
+                'lichess_link':    v_lichess.get(),
+                'answers_section': v_answers.get(),
+                'answers_title':   v_answers_title.get(),
+                'answers_cols':    v_answers_cols.get(),
+                'figurine_font':   v_fig_font.get(),
             }
             def on_progress(pct: int) -> None:
                 set_status(f'{pct}%')
@@ -885,6 +1180,12 @@ def run_gui():
     ttk.Combobox(page_fr, textvariable=v_font, width=20, state='readonly',
                  values=FONT_NAMES).grid(row=1, column=4, sticky='ew')
 
+    # Font size (row 2)
+    widgets['font_size_lbl'] = ttk.Label(page_fr, anchor='w')
+    widgets['font_size_lbl'].grid(row=2, column=3, sticky='w', padx=(0, 6), pady=(4, 0))
+    ttk.Spinbox(page_fr, textvariable=v_font_size, from_=0, to=36, width=5,
+                ).grid(row=2, column=4, sticky='w', pady=(4, 0))
+
     # ── DIAGRAM ────────────────────────────────────────────────────────────────
     section('section_diagram')
     diag_fr = ttk.Frame(main)
@@ -937,29 +1238,47 @@ def run_gui():
     cb.pack(side='left')
     widgets['coords'] = cb
 
-    # Title source + custom entry on same row
+    # Title template field
     lbl = ttk.Label(diag_fr, anchor='w')
     lbl.grid(row=4, column=0, sticky='w', padx=(0, 8), pady=(0, 6))
     widgets['title_source'] = lbl
-    title_fr = ttk.Frame(diag_fr)
-    title_fr.grid(row=4, column=1, sticky='w', pady=(0, 6))
-    for _val, _key in (('number', 'title_number'), ('comment', 'title_comment'),
-                       ('custom', 'title_custom_lbl')):
-        rb = ttk.Radiobutton(title_fr, variable=v_title_mode, value=_val)
-        rb.pack(side='left', padx=(0, 4))
-        widgets[_key] = rb
-    custom_entry = ttk.Entry(title_fr, textvariable=v_title_custom, width=16)
-    custom_entry.pack(side='left', padx=(6, 0))
+    tpl_fr = ttk.Frame(diag_fr)
+    tpl_fr.grid(row=4, column=1, sticky='ew', pady=(0, 6))
+    tpl_fr.columnconfigure(0, weight=1)
+    ttk.Entry(tpl_fr, textvariable=v_title_template).grid(row=0, column=0, sticky='ew')
 
-    def _update_custom_entry(*_):
-        custom_entry.config(state='normal' if v_title_mode.get() == 'custom' else 'disabled')
-    v_title_mode.trace_add('write', _update_custom_entry)
-    _update_custom_entry()
+    def _show_template_help() -> None:
+        messagebox.showinfo(t('tpl_help_title'), t('tpl_help_body'))
+
+    ttk.Button(tpl_fr, text='?', width=2, command=_show_template_help).grid(
+        row=0, column=1, padx=(4, 0))
 
     # Lichess
     cb = ttk.Checkbutton(diag_fr, variable=v_lichess)
     cb.grid(row=5, column=0, columnspan=2, sticky='w', pady=(0, 6))
     widgets['lichess_link'] = cb
+
+    # Answers section
+    ans_cb = ttk.Checkbutton(diag_fr, variable=v_answers)
+    ans_cb.grid(row=6, column=0, columnspan=2, sticky='w', pady=(0, 4))
+    widgets['answers_section'] = ans_cb
+
+    # Answers heading label + entry
+    widgets['answers_title_lbl'] = ttk.Label(diag_fr)
+    widgets['answers_title_lbl'].grid(row=7, column=0, sticky='w', pady=(0, 4))
+    ttk.Entry(diag_fr, textvariable=v_answers_title).grid(row=7, column=1, sticky='ew', pady=(0, 4))
+
+    # Answer columns label + combobox (1 or 2)
+    widgets['answers_cols_lbl'] = ttk.Label(diag_fr)
+    widgets['answers_cols_lbl'].grid(row=8, column=0, sticky='w', pady=(0, 4))
+    ttk.Combobox(diag_fr, textvariable=v_answers_cols, values=['1', '2'],
+                 state='readonly', width=4).grid(row=8, column=1, sticky='w', pady=(0, 4))
+
+    # Figurine font label + combobox
+    widgets['figurine_font_lbl'] = ttk.Label(diag_fr)
+    widgets['figurine_font_lbl'].grid(row=9, column=0, sticky='w', pady=(0, 6))
+    ttk.Combobox(diag_fr, textvariable=v_fig_font, values=FIGURINE_NAMES,
+                 state='readonly', width=14).grid(row=9, column=1, sticky='w', pady=(0, 6))
 
     # ── Generate PDF button ────────────────────────────────────────────────────
     ttk.Separator(main, orient='horizontal').pack(fill='x', pady=(6, 10))
@@ -981,6 +1300,7 @@ def run_gui():
             'lang':         lang[0],
             'layout':       v_layout.get(),
             'font':         v_font.get(),
+            'font_size':    v_font_size.get(),
             'coords':       v_coords.get(),
             'orient':       v_orient.get(),
             'header':       v_header.get(),
@@ -990,16 +1310,19 @@ def run_gui():
             'symbol':       v_symbol.get(),
             'lines_count':  v_lines_count.get(),
             'lines_mode':   v_lines_mode.get(),
-            'title_mode':   v_title_mode.get(),
-            'title_custom': v_title_custom.get(),
-            'lichess':      v_lichess.get(),
+            'title_template':  v_title_template.get(),
+            'lichess':         v_lichess.get(),
+            'answers_section': v_answers.get(),
+            'answers_title':   v_answers_title.get(),
+            'answers_cols':    v_answers_cols.get(),
+            'figurine_font':   v_fig_font.get(),
         })
         root.destroy()
 
     v_input.trace_add('write', update_btn_state)
-    for _sv in (v_layout, v_font, v_coords, v_orient, v_header, v_footer,
+    for _sv in (v_layout, v_font, v_font_size, v_coords, v_orient, v_header, v_footer,
                 v_sh_hdr, v_sh_ftr, v_symbol, v_lines_count, v_lines_mode,
-                v_title_mode, v_title_custom, v_lichess):
+                v_title_template, v_lichess, v_answers, v_answers_title, v_answers_cols, v_fig_font):
         _sv.trace_add('write', on_setting_change)
     root.protocol('WM_DELETE_WINDOW', on_close)
     # Measure both languages and fix window to the larger size
@@ -1025,6 +1348,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Convert PGN/FEN/EPD chess files to PDF diagrams (Chess Alpha DG fonts).'
     )
+    parser.add_argument('--version', action='version', version=f'DiagPDF {__version__}')
     parser.add_argument('input', nargs='?', help='Input file (.pgn, .fen, .epd)')
     parser.add_argument('-o', '--output', help='Output PDF (default: <input>.pdf)')
     parser.add_argument('-l', '--layout', type=int, default=DEFAULT_LAYOUT,
@@ -1045,10 +1369,8 @@ def main():
                         help='Notation lines per diagram (default: 0)')
     parser.add_argument('--lines-numbered', action='store_true',
                         help='Prefix notation lines with move numbers')
-    parser.add_argument('--title-mode', choices=['number', 'comment', 'custom'],
-                        default='comment', help='Position title source (default: comment)')
-    parser.add_argument('--title-text', default='',
-                        help='Custom title text for all positions (use with --title-mode=custom)')
+    parser.add_argument('--title-template', default='',
+                        help='Title template, e.g. "{number} {comment}" (vars: number, event, white, black, date, comment)')
     parser.add_argument('--lichess-link', action='store_true',
                         help='Embed clickable Lichess analysis links in position titles')
     parser.add_argument('--gui', action='store_true', help='Launch GUI')
@@ -1101,8 +1423,7 @@ def main():
         'symbol':      args.symbol,
         'lines_count':  args.lines,
         'lines_mode':   'numbered' if args.lines_numbered else 'plain',
-        'title_mode':   args.title_mode,
-        'title_custom': args.title_text,
+        'title_template': args.title_template or '{number} {comment}',
         'lichess_link': args.lichess_link,
     }
 

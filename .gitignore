@@ -7,27 +7,25 @@ venv/
 .venv/
 
 # Claude AI settings
-.claude
+.claude/
 
 # PyInstaller build artifacts
 build/
 dist/
-*.spec.bak
 
 # Auto-generated patched fonts
 Fonts/*_patch.ttf
 
-# Extra / unused font files
-Fonts/HastingsFigurine.TTF
-Fonts/LinaresFigurine.TTF
-Fonts/ZurichFigurine.TTF
+# Unused / extra files in Fonts
 Fonts/AlphaDG.pdf
 Fonts/!Chess fonts.doc
 Fonts/Fonts-org/
 
-# User data / test input files (but allow Example folder)
+# PGN/PDF test/user files in root (keep Example/)
 *.pgn
 !Example/*.pgn
+*.pdf
+!Example/*.pdf
 
 # Internal project docs (not for public repo)
 ROADMAP.md

@@ -1,3 +1,4 @@
 fpdf2>=2.7.0
 fonttools>=4.40.0
 sv-ttk>=2.6.0
+pillow>=9.0.0

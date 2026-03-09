@@ -17,10 +17,14 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('Fonts/AlphaDG.ttf',   'Fonts'),
-        ('Fonts/LeipzigDG.ttf', 'Fonts'),
-        ('Fonts/CondalDG.ttf',  'Fonts'),
-        ('Fonts/KingdomDG.ttf', 'Fonts'),
+        ('Fonts/AlphaDG.ttf',           'Fonts'),
+        ('Fonts/LeipzigDG.ttf',         'Fonts'),
+        ('Fonts/CondalDG.ttf',          'Fonts'),
+        ('Fonts/KingdomDG.ttf',         'Fonts'),
+        ('Fonts/HastingsFigurine.TTF',  'Fonts'),
+        ('Fonts/ZurichFigurine.TTF',    'Fonts'),
+        ('Fonts/LinaresFigurine.TTF',   'Fonts'),
+        ('icon.ico',                    '.'),
     ] + sv_ttk_datas,
     hiddenimports=['fontTools', 'fontTools.ttLib'],
     hookspath=[],
@@ -49,11 +53,11 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,       # no console window (GUI app)
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon='icon.ico',   # uncomment if you add an icon
+    icon='icon.ico',
 )
