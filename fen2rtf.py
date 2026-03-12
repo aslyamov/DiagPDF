@@ -8,7 +8,7 @@ Usage:
     python fen2rtf.py --gui
 """
 
-__version__ = '0.2.0'
+__version__ = '0.2.1'
 
 import os
 import re
@@ -16,7 +16,23 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypedDict
+
+
+class _PositionRequired(TypedDict):
+    fen: str
+
+
+class PositionDict(_PositionRequired, total=False):
+    """Position data shared by all three parsers (PGN / FEN file / EPD)."""
+    white:   str
+    black:   str
+    event:   str
+    date:    str
+    chapter: str
+    comment: str
+    moves:   str
 
 
 def _resource(rel: str) -> Path:
@@ -70,9 +86,9 @@ SYMBOL_KEYS = list(SYMBOL_CHARS.keys())
 # ─────────────────────────────────────────────────────────────────────────────
 # Layout presets
 # (label_en, label_ru, cols, rows_plain, rows_lined)
-# Layout tuple: (label_en, label_ru, cols, rows_plain, rows_lined, default_fpt, title_pt, title_offset)
-#   default_fpt   = chess font size (pt) for plain mode; lined mode recalculates to fit
-#   title_pt      = title font size (pt); cell height = title_pt * 0.388 must be < fpt * 0.353
+# Layout tuple: (label_en, label_ru, cols, rows_plain, rows_lined, default_chess_pt, title_pt, title_offset)
+#   default_chess_pt   = chess font size (pt) for plain mode; lined mode recalculates to fit
+#   title_pt      = title font size (pt); cell height = title_pt * 0.388 must be < chess_pt * 0.353
 #   title_offset  = vertical shift (mm) from centered position: + toward rank-8, − toward top frame
 # ─────────────────────────────────────────────────────────────────────────────
 LAYOUTS: list[tuple[str, str, int, int, int, int, int, float]] = [
@@ -186,7 +202,7 @@ T: dict[str, tuple] = {
 # FEN parsing & diagram rendering
 # ─────────────────────────────────────────────────────────────────────────────
 
-def parse_fen(fen_str: str):
+def parse_fen(fen_str: str) -> tuple[list[list[str | None]], str]:
     """Parse a FEN string into an 8x8 board array and side-to-move ('w'/'b')."""
     parts = fen_str.strip().split()
     board_str = parts[0]
@@ -206,7 +222,7 @@ def parse_fen(fen_str: str):
 
 
 def fen_to_diagram(fen_str: str, coords: bool = True, flip: bool = False,
-                   flip_auto: bool = False, symbol: str = 'square') -> list:
+                   flip_auto: bool = False, symbol: str = 'square') -> list[str]:
     """Convert a FEN string to a list of 10 character strings for the Chess Alpha DG font.
 
     Each character maps to a glyph via Unicode PUA (chr(0xF000 + ord(c))).
@@ -290,7 +306,7 @@ def _clean_moves(moves_raw: str) -> str:
     return text.strip()
 
 
-def _apply_title_template(template: str, pos: dict, num: int) -> str:
+def _apply_title_template(template: str, pos: PositionDict, num: int) -> str:
     """Expand a title template with position metadata.
 
     Variables: {number}, {event}, {white}, {black}, {date}, {comment}.
@@ -310,7 +326,7 @@ def _apply_title_template(template: str, pos: dict, num: int) -> str:
     return ' '.join(result.split())   # collapse whitespace from empty substitutions
 
 
-def parse_pgn(content: str) -> list:
+def parse_pgn(content: str) -> list[PositionDict]:
     """Parse a PGN file and return a list of position dicts.
 
     Each dict contains: fen, white, black, event, chapter, comment, moves.
@@ -344,13 +360,14 @@ def parse_pgn(content: str) -> list:
     return positions
 
 
-def parse_fen_file(content: str) -> list:
+def parse_fen_file(content: str) -> list[PositionDict]:
     """Parse a .fen file containing [FEN "..."] tags and return position dicts."""
-    return [{'fen': m.group(1), 'white': '', 'black': '', 'event': '', 'chapter': '', 'moves': ''}
+    return [{'fen': m.group(1), 'white': '', 'black': '', 'event': '',
+             'date': '', 'chapter': '', 'comment': '', 'moves': ''}
             for m in re.finditer(r'\[FEN\s+"([^"]*)"\]', content)]
 
 
-def parse_epd(content: str) -> list:
+def parse_epd(content: str) -> list[PositionDict]:
     """Parse an EPD file (one position per line) and return position dicts.
 
     Extracts 'id' operand as white, 'bm' operand as black. FEN is reconstructed
@@ -369,10 +386,10 @@ def parse_epd(content: str) -> list:
         id_m = re.search(r'id\s+"([^"]*)"', rest)
         bm_m = re.search(r'bm\s+([^;]+)', rest)
         positions.append({
-            'fen': fen,
-            'white': id_m.group(1).strip() if id_m else '',
-            'black': bm_m.group(1).strip().rstrip(';') if bm_m else '',
-            'event': '', 'chapter': '', 'moves': '',
+            'fen':     fen,
+            'white':   id_m.group(1).strip() if id_m else '',
+            'black':   bm_m.group(1).strip().rstrip(';') if bm_m else '',
+            'event':   '', 'date': '', 'chapter': '', 'comment': '', 'moves': '',
         })
     return positions
 
@@ -400,6 +417,7 @@ def _ensure_chess_font_patched(font_orig: Path, font_patched: Path) -> str:
         del fnt['VDMX']
         fnt.save(str(font_patched))
     except Exception:
+        font_patched.unlink(missing_ok=True)   # remove partial/corrupted file
         return str(font_orig)
     return str(font_patched if font_patched.exists() else font_orig)
 
@@ -412,6 +430,53 @@ def get_chess_font_path(font_name: str, fonts_dir: Path) -> str:
     return _ensure_chess_font_patched(orig, patched)
 
 
+class FontManager:
+    """Loads and registers chess, text, and figurine fonts into an fpdf2 PDF object."""
+
+    def __init__(self, script_dir: Path) -> None:
+        self.fonts_dir = script_dir / 'Fonts'
+
+    def load_chess(self, pdf, font_name: str) -> None:
+        """Register chess font as 'Chess' in pdf."""
+        path = get_chess_font_path(font_name, self.fonts_dir)
+        pdf.add_font('Chess', fname=path)
+
+    def load_text(self, pdf) -> str:
+        """Register best available Unicode text font as 'TextUni' in pdf.
+
+        Returns the font name to use: 'TextUni' on success, 'helvetica' as fallback.
+        """
+        for candidate in _get_text_font_candidates():
+            try:
+                pdf.add_font('TextUni', fname=candidate)
+            except Exception as e:
+                print(f'TextUni regular load failed ({candidate}): {e}', file=sys.stderr)
+                continue
+            try:
+                pdf.add_font('TextUni', style='B', fname=candidate)
+            except Exception:
+                pass
+            return 'TextUni'
+        return 'helvetica'
+
+    def load_figurine(self, pdf, figurine_font: str, fallback: str) -> str:
+        """Register figurine font as 'Figurine' in pdf.
+
+        Returns 'Figurine' on success, fallback font name otherwise.
+        """
+        if not FIGURINE_NAMES:
+            return fallback
+        fname = FIGURINE_FILES.get(figurine_font, next(iter(FIGURINE_FILES.values())))
+        path  = self.fonts_dir / fname
+        if path.exists():
+            try:
+                pdf.add_font('Figurine', fname=str(path))
+                return 'Figurine'
+            except Exception as e:
+                print(f'Figurine font load failed ({path.name}): {e}', file=sys.stderr)
+        return fallback
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PDF generator
 # ─────────────────────────────────────────────────────────────────────────────
@@ -419,8 +484,170 @@ def get_chess_font_path(font_name: str, fonts_dir: Path) -> str:
 _PT = 25.4 / 72   # 1 pt in mm
 
 
+@dataclass
+class _Geometry:
+    """Computed page/layout geometry passed between PDF rendering functions."""
+    # A4 page
+    PW: float; PH: float
+    ML: float; MR: float; MT: float
+    HY: float; FY: float
+    USABLE_W: float; USABLE_H: float
+    LINE_H: float
+    # layout grid
+    cols: int; max_rows: int; per_page: int
+    col_w: float; x_pad: float; y_top: float; row_h: float
+    lines_h: float
+    # chess font
+    chess_pt: int; chess_mm: float
+    diag_w: float; char_w: float; inner_w: float
+    # text
+    txt_size: int; title_lh: float
+    title_offset: float   # lay[7]: vertical nudge for title inside top border
 
-def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
+
+def _compute_geometry(opts: dict) -> _Geometry:
+    """Parse opts and compute all layout/geometry values (pure, no side effects)."""
+    layout_idx  = max(0, min(opts.get('layout_idx', DEFAULT_LAYOUT), len(LAYOUTS) - 1))
+    lines_count = int(opts.get('lines_count', 0))
+    txt_size_opt = opts.get('text_size', 0)
+
+    PW, PH   = PAGE_W, PAGE_H
+    ML = MR  = MARGIN_LR
+    MT       = MARGIN_TB
+    HY = FY  = HDR_FTR_Y
+    USABLE_W = PW - ML - MR
+    USABLE_H = PH - MT - MT
+    LINE_H   = NOTATION_LINE_H
+
+    lay      = LAYOUTS[layout_idx]
+    cols     = lay[2]
+    max_rows = lay[4] if lines_count > 0 else lay[3]
+    per_page = cols * max_rows
+
+    lines_h   = lines_count * LINE_H
+    requested = opts.get('font_size', 0)
+    if requested > 0:
+        chess_pt = requested
+    elif lines_count == 0:
+        chess_pt = lay[5]
+    else:
+        chess_pt_v = (USABLE_H / max_rows - ROW_OVERHEAD - lines_h) / (10 * _PT)
+        chess_pt_h = (USABLE_W / cols) / 10 / _PT
+        chess_pt = max(MIN_FONT_PT, min(lay[5], int(min(chess_pt_v, chess_pt_h))))
+
+    chess_mm = chess_pt * _PT
+    col_w    = USABLE_W / cols
+    txt_size = txt_size_opt if txt_size_opt > 0 else lay[6]
+    title_lh = txt_size * _PT * TITLE_LH_FACTOR
+    row_h    = 10 * chess_mm + lines_h + ROW_OVERHEAD
+    content_h = max_rows * row_h
+    y_top    = MT + max(0.0, (USABLE_H - content_h) / 2)
+
+    # diag_w and char_w require font metrics — set to 0 as placeholders;
+    # generate_pdf fills them after loading the chess font into the PDF.
+    return _Geometry(
+        PW=PW, PH=PH, ML=ML, MR=MR, MT=MT, HY=HY, FY=FY,
+        USABLE_W=USABLE_W, USABLE_H=USABLE_H, LINE_H=LINE_H,
+        cols=cols, max_rows=max_rows, per_page=per_page,
+        col_w=col_w, x_pad=0.0, y_top=y_top, row_h=row_h, lines_h=lines_h,
+        chess_pt=chess_pt, chess_mm=chess_mm,
+        diag_w=0.0, char_w=0.0, inner_w=0.0,
+        txt_size=txt_size, title_lh=title_lh,
+        title_offset=lay[7],
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Page geometry constants (A4, mm)
+# ─────────────────────────────────────────────────────────────────────────────
+PAGE_W          = 210.0   # A4 width
+PAGE_H          = 297.0   # A4 height
+MARGIN_LR       = 10.0    # left and right page margins
+MARGIN_TB       = 15.0    # top and bottom page margins
+HDR_FTR_Y       = 10.0    # header/footer distance from page edge
+NOTATION_LINE_H = 6.0     # mm per notation line below diagram
+ROW_OVERHEAD    = 3.0     # extra mm per row (inter-row spacing)
+MIN_FONT_PT     = 8       # minimum chess font size (pt)
+TITLE_LH_FACTOR = 1.1     # title line-height multiplier
+
+
+def _make_title(pos: PositionDict, num: int, template: str, mode: str, custom: str) -> str:
+    """Build the diagram title from position data."""
+    if template:
+        return _apply_title_template(template, pos, num)
+    comment = pos.get('comment', '').strip()
+    if mode == 'number':
+        return str(num)
+    if mode == 'custom':
+        return f'{num} {custom}' if custom else str(num)
+    return f'{num} {comment}' if comment else str(num)  # 'comment' mode
+
+
+def _get_text_font_candidates() -> list[str]:
+    """Return system font paths to try as the Unicode text font."""
+    candidates: list[str] = []
+    if sys.platform == 'win32':
+        wf = Path(os.environ.get('SystemRoot', os.environ.get('WINDIR', r'C:\Windows'))) / 'Fonts'
+        uf = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'Windows' / 'Fonts'
+        for name in ('arial.ttf', 'Arial.ttf', 'arialuni.ttf',
+                     'calibri.ttf', 'Calibri.ttf',
+                     'segoeui.ttf', 'SegoeUI.ttf',
+                     'tahoma.ttf', 'Tahoma.ttf',
+                     'verdana.ttf', 'Verdana.ttf'):
+            for base in (wf, uf):
+                p = base / name
+                if p.exists():
+                    candidates.append(str(p))
+    elif sys.platform == 'darwin':
+        for p in (Path('/Library/Fonts/Arial.ttf'),
+                  Path('/Library/Fonts/Tahoma.ttf'),
+                  Path('/System/Library/Fonts/Geneva.ttf')):
+            if p.exists():
+                candidates.append(str(p))
+    else:
+        for p in (Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
+                  Path('/usr/share/fonts/TTF/DejaVuSans.ttf'),
+                  Path('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'),
+                  Path('/usr/share/fonts/truetype/freefont/FreeSans.ttf')):
+            if p.exists():
+                candidates.append(str(p))
+    return candidates
+
+
+def _rerender_with_total(
+    pdf, pgnum: int, page_chapters: dict[int, str],
+    header: str, footer: str, show_hdr: bool, show_ftr: bool,
+    text_font: str, txt_size: int, g: _Geometry,
+) -> None:
+    """Re-render page headers/footers that contain {total} once the total page count is known.
+
+    fpdf2 appends to page content streams, so we blank the old area with a white
+    rectangle before redrawing with the resolved total.
+    """
+    if pgnum == 0 or ('{total}' not in header and '{total}' not in footer):
+        return
+    _saved_page = pdf.page
+    for _pn in range(1, pgnum + 1):
+        pdf.page = _pn
+        pdf.set_fill_color(255, 255, 255)
+        _chap  = page_chapters.get(_pn, '')
+        _pg_s  = str(_pn)
+        _tot_s = str(pgnum)
+        if show_hdr and header and '{total}' in header:
+            pdf.rect(g.ML, g.HY - 2, g.USABLE_W, 6, style='F')
+            txt = header.replace('{chapter}', _chap).replace('{page}', _pg_s).replace('{total}', _tot_s)
+            pdf.set_font(text_font, 'B', size=txt_size)
+            pdf.set_xy(g.ML, g.HY - 1)
+            pdf.cell(w=g.USABLE_W, h=4, text=txt, align='C')
+        if show_ftr and footer and '{total}' in footer:
+            pdf.rect(g.ML, g.PH - g.FY - 2, g.USABLE_W, 6, style='F')
+            txt = footer.replace('{chapter}', _chap).replace('{page}', _pg_s).replace('{total}', _tot_s)
+            pdf.set_font(text_font, size=txt_size)
+            pdf.set_xy(g.ML, g.PH - g.FY - 1)
+            pdf.cell(w=g.USABLE_W, h=4, text=txt, align='C')
+    pdf.page = _saved_page
+
+
+def generate_pdf(positions: list[PositionDict], opts: dict, out_path, progress=None) -> None:
     """Render a list of chess positions to a PDF file.
 
     Args:
@@ -451,8 +678,6 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
     except ImportError:
         raise RuntimeError('fpdf2 required — install with: pip install fpdf2')
 
-    txt_size_opt = opts.get('text_size', 0)   # 0 = auto (proportional to fpt)
-    layout_idx   = max(0, min(opts.get('layout_idx', DEFAULT_LAYOUT), len(LAYOUTS) - 1))
     coords      = opts.get('coords', True)
     flip        = opts.get('flip', False)
     flip_auto   = opts.get('flip_auto', True)
@@ -474,47 +699,28 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
     answers_cols    = min(max(1, int(opts.get('answers_cols', 1))), 2)
 
     script_dir = _resource('.')   # works in both .py and frozen .exe
-    chess_path = get_chess_font_path(font_name, script_dir / 'Fonts')
+    fm = FontManager(script_dir)
+    g  = _compute_geometry(opts)
 
-    # Page geometry (mm, A4)
-    PW, PH   = 210.0, 297.0
-    ML = MR  = 10.0
-    MT       = 15.0
-    HY = FY  = 10.0
-    USABLE_W = PW - ML - MR   # 190 mm
-    LINE_H   = 6.0             # mm per notation line
-
-    lay      = LAYOUTS[layout_idx]
-    cols     = lay[2]
-    max_rows = lay[4] if lines_count > 0 else lay[3]
-
-    requested  = opts.get('font_size', 0)
-    lines_h    = lines_count * LINE_H
-    USABLE_H   = PH - MT - MT            # 267 mm between top and bottom margins
-    if requested > 0:
-        fpt = requested
-    elif lines_count == 0:
-        fpt = lay[5]   # hardcoded default for plain (no-lines) mode
-    else:
-        # Title embeds in top border row → no title overhead in row_h.
-        # row_h = 10*fmm + lines_h + 3.0  =>  fpt = (USABLE_H/max_rows - 3.0 - lines_h) / (10*_PT)
-        fpt_v = (USABLE_H / max_rows - 3.0 - lines_h) / (10 * _PT)
-        fpt_h = (USABLE_W / cols) / 10 / _PT
-        fpt = max(8, min(lay[5], int(min(fpt_v, fpt_h))))
-
-    fmm      = fpt * _PT
-    col_w    = USABLE_W / cols
-
-    # txt_size: per-layout default from lay[6]; overridden by explicit text_size option
-    txt_size = txt_size_opt if txt_size_opt > 0 else lay[6]
-
-    title_lh  = txt_size * _PT * 1.1
-    # Title is embedded in the board's top border row (no separate area).
-    # Centering: title_cy = y + (fmm - title_lh)/2  (set in the per-diagram loop)
-    row_h     = 10 * fmm + lines_h + 3.0
-    per_page  = cols * max_rows
-    content_h = max_rows * row_h
-    y_top     = MT + max(0.0, (USABLE_H - content_h) / 2)  # vertically centred
+    # Unpack geometry into local names (matches rest of function)
+    PW, PH   = g.PW, g.PH
+    ML, MR   = g.ML, g.MR
+    MT       = g.MT
+    HY, FY   = g.HY, g.FY
+    USABLE_W = g.USABLE_W
+    LINE_H   = g.LINE_H
+    cols     = g.cols
+    max_rows = g.max_rows
+    per_page = g.per_page
+    col_w    = g.col_w
+    y_top    = g.y_top
+    row_h    = g.row_h
+    lines_h  = g.lines_h
+    chess_pt     = g.chess_pt
+    chess_mm     = g.chess_mm
+    txt_size     = g.txt_size
+    title_lh     = g.title_lh
+    title_offset = g.title_offset
 
     def chess_str(s: str) -> str:
         return ''.join(chr(0xF000 + ord(c)) for c in s)
@@ -522,71 +728,20 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
     pdf = FPDF(unit='mm', format='A4')
     pdf.set_margins(ML, MT, MR)
     pdf.set_auto_page_break(auto=False)
-    pdf.add_font('Chess', fname=chess_path)
+    fm.load_chess(pdf, font_name)
 
     # Measure actual board width from font metrics (10 chars per row).
-    # diag_w = 10 * fmm only holds for perfectly monospace fonts;
+    # diag_w = 10 * chess_mm only holds for perfectly monospace fonts;
     # Chess Alpha DG glyph advances may differ slightly from the em square.
-    pdf.set_font('Chess', size=fpt)
-    _sample_row = chess_str('!' + 'z' * 8 + '#')   # representative 10-char board row
-    diag_w  = pdf.get_string_width(_sample_row) or (10 * fmm)
+    pdf.set_font('Chess', size=chess_pt)
+    _sample_row = chess_str(BDR_NW + BDR_N * 8 + BDR_NE)   # representative 10-char board row
+    diag_w  = pdf.get_string_width(_sample_row) or (10 * chess_mm)
     x_pad   = (col_w - diag_w) / 2
     char_w  = diag_w / 10          # width of one border/square character
     inner_w = diag_w - 2 * char_w  # width spanning exactly 8 board squares
 
-    # Add a Unicode-capable font for text (supports Cyrillic and other non-Latin)
-    _text_font = 'helvetica'  # fallback to built-in (Latin only)
-    _font_candidates: list[str] = []
-    if sys.platform == 'win32':
-        _wf = Path(os.environ.get('SystemRoot', os.environ.get('WINDIR', r'C:\Windows'))) / 'Fonts'
-        _uf = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'Windows' / 'Fonts'
-        for _name in ('arial.ttf', 'Arial.ttf', 'arialuni.ttf',
-                      'calibri.ttf', 'Calibri.ttf',
-                      'segoeui.ttf', 'SegoeUI.ttf',
-                      'tahoma.ttf', 'Tahoma.ttf',
-                      'verdana.ttf', 'Verdana.ttf'):
-            for _base in (_wf, _uf):
-                _p = _base / _name
-                if _p.exists():
-                    _font_candidates.append(str(_p))
-    elif sys.platform == 'darwin':
-        for _p in (Path('/Library/Fonts/Arial.ttf'),
-                   Path('/Library/Fonts/Tahoma.ttf'),
-                   Path('/System/Library/Fonts/Geneva.ttf')):
-            if _p.exists():
-                _font_candidates.append(str(_p))
-    else:
-        for _p in (Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
-                   Path('/usr/share/fonts/TTF/DejaVuSans.ttf'),
-                   Path('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'),
-                   Path('/usr/share/fonts/truetype/freefont/FreeSans.ttf')):
-            if _p.exists():
-                _font_candidates.append(str(_p))
-    for _candidate in _font_candidates:
-        try:
-            pdf.add_font('TextUni', fname=_candidate)
-            _text_font = 'TextUni'
-        except Exception as _e:
-            print(f'TextUni regular load failed ({_candidate}): {_e}', file=sys.stderr)
-            continue
-        # Bold is optional — use same file; if it fails, regular is still used
-        try:
-            pdf.add_font('TextUni', style='B', fname=_candidate)
-        except Exception:
-            pass
-        break
-
-    # Load figurine font for answers section (fallback = text font)
-    _fig_font_name = _text_font
-    if answers_section and FIGURINE_NAMES:
-        _fig_fname = FIGURINE_FILES.get(figurine_font, next(iter(FIGURINE_FILES.values())))
-        _fig_path  = script_dir / 'Fonts' / _fig_fname
-        if _fig_path.exists():
-            try:
-                pdf.add_font('Figurine', fname=str(_fig_path))
-                _fig_font_name = 'Figurine'
-            except Exception as _e:
-                print(f'Figurine font load failed ({_fig_path.name}): {_e}', file=sys.stderr)
+    _text_font     = fm.load_text(pdf)
+    _fig_font_name = fm.load_figurine(pdf, figurine_font, _text_font) if answers_section else _text_font
 
     pgnum = 0
 
@@ -647,20 +802,11 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
         # ── Title (above diagram) ─────────────────────────────────────────────
         fen     = pos.get('fen', '').strip()
         num     = pos_idx + 1
-        if title_template:
-            title = _apply_title_template(title_template, pos, num)
-        else:
-            comment = pos.get('comment', '').strip()
-            if title_mode == 'number':
-                title = str(num)
-            elif title_mode == 'custom':
-                title = f'{num} {title_custom}' if title_custom else str(num)
-            else:  # 'comment'
-                title = f'{num} {comment}' if comment else str(num)
+        title = _make_title(pos, num, title_template, title_mode, title_custom)
 
+        _side = parse_fen(fen)[1] if (lichess_link or lines_count > 0) else ''
         link_url = ''
         if lichess_link:
-            _, _side = parse_fen(fen)
             _color = 'black' if _side == 'b' else 'white'
             link_url = f'https://lichess.org/analysis/{fen.strip().replace(" ", "_")}?color={_color}'
 
@@ -674,16 +820,17 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
         try:
             diag_lines = fen_to_diagram(fen, coords=coords, flip=flip,
                                         flip_auto=flip_auto, symbol=symbol)
-            pdf.set_font('Chess', size=fpt)
+            pdf.set_font('Chess', size=chess_pt)
             for i, ln in enumerate(diag_lines):
-                pdf.set_xy(x, y_diag + i * fmm)
-                pdf.cell(w=diag_w, h=fmm, text=chess_str(ln))
+                pdf.set_xy(x, y_diag + i * chess_mm)
+                pdf.cell(w=diag_w, h=chess_mm, text=chess_str(ln))
             # Lichess link overlaid on the side-to-move symbol (right border, visual bottom rank).
             # The symbol is always in diag_lines[8] (last rank row before bottom border).
             if lichess_link and link_url:
-                pdf.link(x=x + diag_w - char_w, y=y_diag + 8 * fmm,
-                         w=char_w, h=fmm, link=link_url)
-        except Exception:
+                pdf.link(x=x + diag_w - char_w, y=y_diag + 8 * chess_mm,
+                         w=char_w, h=chess_mm, link=link_url)
+        except Exception as e:
+            print(f'Warning: FEN render error ({fen!r}): {e}', file=sys.stderr)
             pdf.set_font(_text_font, size=8)
             pdf.set_xy(x, y_diag)
             pdf.cell(w=diag_w, h=5, text='[FEN error]')
@@ -692,15 +839,14 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
         # When answers section is active: title links to answer; Lichess goes on symbol.
         # When no answers section: title links to Lichess (if enabled).
         _title_link: int | str = ans_links[pos_idx] if ans_links else link_url
-        title_cy = y_diag + (fmm - title_lh) / 2 + lay[7]
+        title_cy = y_diag + (chess_mm - title_lh) / 2 + title_offset
         pdf.set_font(_text_font, 'B', size=txt_size)
         pdf.set_xy(x + char_w, title_cy)
         pdf.cell(w=inner_w, h=title_lh, text=title, align='C', link=_title_link)
 
         # ── Notation lines ───────────────────────────────────────────────────
         if lines_count > 0:
-            _, _side_ln = parse_fen(fen)
-            base_y  = y_diag + 10 * fmm + 0.5
+            base_y  = y_diag + 10 * chess_mm + 0.5
             lx      = x + char_w                       # start after left border
             gap_w   = min(2.0, inner_w * 0.06)         # gap between the two blanks
             pdf.set_line_width(0.2)
@@ -717,7 +863,7 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
                     x1 = x0 + blank_w
                     x2 = x1 + gap_w
                     x3 = x2 + blank_w
-                    if li == 0 and _side_ln == 'b':
+                    if li == 0 and _side == 'b':
                         # Black to move: skip white's blank, draw only black's blank
                         pdf.line(x2, ly, x3, ly)
                     else:
@@ -832,64 +978,23 @@ def generate_pdf(positions: list, opts: dict, out_path, progress=None) -> None:
         pdf.set_right_margin(MR)
 
     # ── Re-render headers/footers with {total} resolved ──────────────────────
-    # fpdf2 appends to page streams, so drawing over existing content replaces it
-    # visually when we first blank the area with a white rectangle.
-    if pgnum > 0 and ('{total}' in header or '{total}' in footer):
-        _saved_page = pdf.page
-        for _pn in range(1, pgnum + 1):
-            pdf.page = _pn
-            pdf.set_fill_color(255, 255, 255)
-            _chap = _page_chapters.get(_pn, '')
-            _pg_s = str(_pn)
-            _tot_s = str(pgnum)
-            if show_hdr and header and '{total}' in header:
-                pdf.rect(ML, HY - 2, USABLE_W, 6, style='F')
-                txt = header.replace('{chapter}', _chap).replace('{page}', _pg_s).replace('{total}', _tot_s)
-                pdf.set_font(_text_font, 'B', size=txt_size)
-                pdf.set_xy(ML, HY - 1)
-                pdf.cell(w=USABLE_W, h=4, text=txt, align='C')
-            if show_ftr and footer and '{total}' in footer:
-                pdf.rect(ML, PH - FY - 2, USABLE_W, 6, style='F')
-                txt = footer.replace('{chapter}', _chap).replace('{page}', _pg_s).replace('{total}', _tot_s)
-                pdf.set_font(_text_font, size=txt_size)
-                pdf.set_xy(ML, PH - FY - 1)
-                pdf.cell(w=USABLE_W, h=4, text=txt, align='C')
-        pdf.page = _saved_page
+    _rerender_with_total(pdf, pgnum, _page_chapters,
+                         header, footer, show_hdr, show_ftr,
+                         _text_font, txt_size, g)
 
     pdf.output(str(out_path))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GUI
+# GUI helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_CONFIG_PATH = Path.home() / '.diagpdf.json'
+def _setup_theme(root, ttk) -> tuple[str, str, str, str]:
+    """Apply sv-ttk (if available) or a custom clam theme to *root*.
 
-def _load_config() -> dict:
-    try:
-        return json.loads(_CONFIG_PATH.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
-
-def _save_config(data: dict) -> None:
-    try:
-        _CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
-    except Exception:
-        pass
-
-
-def run_gui():
-    try:
-        import tkinter as tk
-        from tkinter import ttk, filedialog, messagebox
-    except ImportError:
-        print('tkinter not available. Use command-line mode.', file=sys.stderr)
-        sys.exit(1)
-
-    cfg  = _load_config()
-    lang = [cfg.get('lang', 'en')]
-
-    # ── Colour palette ─────────────────────────────────────────────────────────
+    Returns (OK, ERR, ACCENT, FONT_FAMILY) — colour/font constants needed
+    by the rest of the GUI for status labels and logo text.
+    """
     BG     = '#F0F4F8'
     CARD   = '#FFFFFF'
     BDR    = '#CBD5E1'
@@ -902,10 +1007,6 @@ def run_gui():
     ERR    = '#B91C1C'
     F      = 'Segoe UI'
 
-    root = tk.Tk()
-    root.resizable(False, False)
-
-    # ── Theme: sv-ttk if available, else custom clam ───────────────────────────
     st = ttk.Style(root)
     try:
         import sv_ttk  # type: ignore[import]
@@ -926,10 +1027,7 @@ def run_gui():
                      bordercolor=BDR, arrowcolor=FG2)
         st.map('TCombobox', fieldbackground=[('readonly', CARD)])
 
-    # Section header label
     st.configure('SectionHdr.TLabel', foreground=ACCENT, font=(F, 8, 'bold'))
-
-    # Primary (Generate PDF) button — accent colour regardless of theme
     st.configure('Accent.TButton',
                  background=ACCENT, foreground='white',
                  font=(F, 10, 'bold'), relief='flat', borderwidth=0,
@@ -937,12 +1035,45 @@ def run_gui():
     st.map('Accent.TButton',
            background=[('active', AHOV), ('disabled', ADIS)],
            foreground=[('disabled', '#E2E8F0')])
-
-    # Browse ('…') button
     st.configure('Browse.TButton',
                  foreground=ACCENT, font=(F, 9), relief='flat',
                  borderwidth=1, bordercolor=BDR, padding=(6, 3))
     st.map('Browse.TButton', background=[('active', '#EFF6FF')])
+
+    return OK, ERR, ACCENT, F
+
+
+_CONFIG_PATH = Path.home() / '.diagpdf.json'
+
+def _load_config() -> dict:
+    try:
+        return json.loads(_CONFIG_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+def _save_config(data: dict) -> None:
+    try:
+        _CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    except Exception as e:
+        print(f'Warning: could not save settings: {e}', file=sys.stderr)
+
+
+def run_gui():
+    try:
+        import tkinter as tk
+        from tkinter import ttk, filedialog, messagebox
+    except ImportError:
+        print('tkinter not available. Use command-line mode.', file=sys.stderr)
+        sys.exit(1)
+
+    cfg  = _load_config()
+    lang: str = cfg.get('lang', 'en')
+
+    root = tk.Tk()
+    root.resizable(False, False)
+    OK, ERR, ACCENT, F = _setup_theme(root, ttk)
+
+    FG2 = '#64748B'  # secondary text colour (used for status label)
 
     # ── Variables ──────────────────────────────────────────────────────────────
     v_input       = tk.StringVar()
@@ -973,23 +1104,24 @@ def run_gui():
         entry = T.get(key)
         if entry is None:
             return key
-        return entry[0] if lang[0] == 'en' else entry[1]
+        return entry[0] if lang == 'en' else entry[1]
 
-    _last_pdf:     list[Path] = [Path()]
-    _generated:    list[bool] = [False]   # True after successful generation
+    _last_pdf:  Path = Path()
+    _generated: bool = False   # True after successful generation
 
     def set_status(msg: str, ok: bool = True) -> None:
         v_status.set(msg)
         status_lbl.config(foreground=OK if ok else ERR)
 
     def on_setting_change(*_) -> None:
-        if _generated[0]:
-            _generated[0] = False
+        nonlocal _generated
+        if _generated:
+            _generated = False
             set_status(t('ready'))
 
     def open_last_pdf() -> None:
         import subprocess
-        p = _last_pdf[0]
+        p = _last_pdf
         if p.exists():
             subprocess.Popen(['start', '', str(p)], shell=True)
 
@@ -1007,13 +1139,14 @@ def run_gui():
                 w.config(text=t(key))
             except Exception:
                 pass
-        lbl_idx = 1 if lang[0] == 'ru' else 0
+        lbl_idx = 1 if lang == 'ru' else 0
         layout_cb['values'] = [str(lay[lbl_idx]) for lay in LAYOUTS]
         layout_cb.current(v_layout.get())
         set_status(t('ready'))
 
     def toggle_lang() -> None:
-        lang[0] = 'ru' if lang[0] == 'en' else 'en'
+        nonlocal lang
+        lang = 'ru' if lang == 'en' else 'en'
         apply_lang()
 
     def update_btn_state(*_) -> None:
@@ -1039,6 +1172,7 @@ def run_gui():
             v_output.set(f)
 
     def convert() -> None:
+        nonlocal _last_pdf, _generated
         in_path = Path(v_input.get().strip())
         out_str = v_output.get().strip()
         out_path = Path(out_str).with_suffix('.pdf') if out_str else in_path.with_suffix('.pdf')
@@ -1087,8 +1221,8 @@ def run_gui():
                 set_status(f'{pct}%')
                 root.update()
             generate_pdf(positions, opts, out_path, progress=on_progress)
-            _last_pdf[0] = out_path
-            _generated[0] = True
+            _last_pdf = out_path
+            _generated = True
             widgets['open_pdf'].config(state='normal')
             set_status(t('done').format(len(positions), out_path.name))
         except Exception as e:
@@ -1159,7 +1293,7 @@ def run_gui():
     lbl = ttk.Label(page_fr, anchor='w')
     lbl.grid(row=0, column=3, sticky='w', padx=(0, 6), pady=(0, 5))
     widgets['layout'] = lbl
-    lbl_idx = 1 if lang[0] == 'ru' else 0
+    lbl_idx = 1 if lang == 'ru' else 0
     layout_cb = ttk.Combobox(page_fr, width=20, state='readonly',
                               values=[str(lay[lbl_idx]) for lay in LAYOUTS])
     layout_cb.current(DEFAULT_LAYOUT)
@@ -1297,7 +1431,7 @@ def run_gui():
 
     def on_close() -> None:
         _save_config({
-            'lang':         lang[0],
+            'lang':         lang,
             'layout':       v_layout.get(),
             'font':         v_font.get(),
             'font_size':    v_font_size.get(),
