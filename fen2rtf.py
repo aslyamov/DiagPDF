@@ -8,7 +8,7 @@ Usage:
     python fen2rtf.py --gui
 """
 
-__version__ = '0.2.1'
+__version__ = '0.2.2'
 
 import os
 import re
@@ -188,6 +188,9 @@ T: dict[str, tuple] = {
                          [('Шахматные файлы', '*.pgn *.fen *.epd'), ('Все файлы', '*.*')]),
     'save_types':       ([('PDF files', '*.pdf'), ('All files', '*.*')],
                          [('PDF файлы', '*.pdf'), ('Все файлы', '*.*')]),
+    'pos_from_lbl':     ('Positions',                    'Позиции'),
+    'pos_to_lbl':       ('to',                           'по'),
+    'err_range':        ('No positions in selected range.', 'Нет позиций в выбранном диапазоне.'),
     'err_not_found':    ('Input file not found:\n{}',    'Файл не найден:\n{}'),
     'err_unknown':      ('Unknown file type: {}',        'Неизвестный тип файла: {}'),
     'err_no_pos':       ('No positions found in file.',  'В файле не найдено позиций.'),
@@ -710,12 +713,10 @@ def generate_pdf(positions: list[PositionDict], opts: dict, out_path, progress=N
     USABLE_W = g.USABLE_W
     LINE_H   = g.LINE_H
     cols     = g.cols
-    max_rows = g.max_rows
     per_page = g.per_page
     col_w    = g.col_w
     y_top    = g.y_top
     row_h    = g.row_h
-    lines_h  = g.lines_h
     chess_pt     = g.chess_pt
     chess_mm     = g.chess_mm
     txt_size     = g.txt_size
@@ -1096,6 +1097,8 @@ def run_gui():
     v_answers_title = tk.StringVar(value=cfg.get('answers_title', 'Solutions'))
     v_answers_cols  = tk.IntVar(value=cfg.get('answers_cols', 1))
     v_fig_font      = tk.StringVar(value=cfg.get('figurine_font', 'Zurich' if 'Zurich' in FIGURINE_NAMES else (FIGURINE_NAMES[0] if FIGURINE_NAMES else '')))
+    v_pos_from      = tk.IntVar(value=0)
+    v_pos_to        = tk.IntVar(value=0)
     v_status        = tk.StringVar(value='')
 
     widgets: dict[str, Any] = {}
@@ -1194,6 +1197,15 @@ def run_gui():
             if not positions:
                 messagebox.showerror('Error', t('err_no_pos'))
                 return
+            pos_from = v_pos_from.get()
+            pos_to   = v_pos_to.get()
+            if pos_from > 0 or pos_to > 0:
+                start = max(0, pos_from - 1) if pos_from > 0 else 0
+                end   = pos_to if pos_to > 0 else None
+                positions = positions[start:end]
+                if not positions:
+                    messagebox.showerror('Error', t('err_range'))
+                    return
             orient = v_orient.get()
             opts = {
                 'layout_idx':  v_layout.get(),
@@ -1274,6 +1286,20 @@ def run_gui():
         row=1, column=1, sticky='ew', padx=(0, 6))
     ttk.Button(files_fr, text='\u2026', command=browse_output,
                style='Browse.TButton', width=3).grid(row=1, column=2)
+
+    # Position range filter (row 2)
+    lbl = ttk.Label(files_fr, anchor='w')
+    lbl.grid(row=2, column=0, sticky='w', padx=(0, 8), pady=(4, 0))
+    widgets['pos_from_lbl'] = lbl
+    range_fr = ttk.Frame(files_fr)
+    range_fr.grid(row=2, column=1, sticky='w', pady=(4, 0))
+    ttk.Spinbox(range_fr, textvariable=v_pos_from, from_=0, to=9999, width=6,
+                ).pack(side='left', padx=(0, 6))
+    pos_to_lbl = ttk.Label(range_fr, anchor='w')
+    pos_to_lbl.pack(side='left', padx=(0, 6))
+    widgets['pos_to_lbl'] = pos_to_lbl
+    ttk.Spinbox(range_fr, textvariable=v_pos_to, from_=0, to=9999, width=6,
+                ).pack(side='left')
 
     # ── PAGE ───────────────────────────────────────────────────────────────────
     section('section_page')
@@ -1518,6 +1544,10 @@ def main():
     parser.add_argument('--figurine-font', default='Zurich',
                         choices=FIGURINE_NAMES if FIGURINE_NAMES else ['Zurich'],
                         help='Figurine font for piece symbols in answers (default: Zurich)')
+    parser.add_argument('--from', dest='pos_from', type=int, default=0, metavar='N',
+                        help='Start from position N (1-based, default: 1)')
+    parser.add_argument('--to', dest='pos_to', type=int, default=0, metavar='N',
+                        help='End at position N inclusive (default: last)')
     parser.add_argument('--gui', action='store_true', help='Launch GUI')
 
     args = parser.parse_args()
@@ -1552,6 +1582,14 @@ def main():
 
     if not positions:
         print('Warning: no positions found.', file=sys.stderr)
+
+    if args.pos_from > 0 or args.pos_to > 0:
+        start = max(0, args.pos_from - 1) if args.pos_from > 0 else 0
+        end   = args.pos_to if args.pos_to > 0 else None
+        positions = positions[start:end]
+        if not positions:
+            print(f'Warning: no positions in selected range.', file=sys.stderr)
+            sys.exit(1)
 
     opts = {
         'layout_idx':  max(0, min(args.layout, len(LAYOUTS) - 1)),
