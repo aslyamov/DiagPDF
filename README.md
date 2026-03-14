@@ -19,6 +19,7 @@ Grab the latest **DiagPDF.exe** from [Releases](../../releases) — no Python re
 - Board coordinates (optional)
 - Flexible diagram titles via template: `{number}`, `{event}`, `{white}`, `{black}`, `{date}`, `{comment}`
 - Notation lines under diagrams: plain or numbered (1–5 lines)
+- **Position range filter**: generate only positions N–M from the file (`--from` / `--to`)
 - **Answers section** at the end of the document with figurine notation (Hastings / Zurich / Linares fonts), 1 or 2 columns
 - **Clickable links**: diagram title → answer, answer number → diagram
 - **Lichess analysis links** embedded in the to-move symbol
@@ -59,6 +60,8 @@ DiagPDF.exe --gui
 |-------|-------------|
 | **Input file** | Click `…` to pick a `.pgn`, `.fen`, or `.epd` file |
 | **Output PDF** | Auto-filled; click `…` to change |
+| **Positions (from / to)** | Generate only a range of positions (auto-filled with 1 and total count after file selection) |
+| **Renumber from 1** | When checked, positions in range are numbered 1, 2, 3… instead of their original file numbers |
 | **Header / Footer** | Text with `{page}`, `{total}`, `{chapter}` |
 | **Layout** | Page grid preset (columns × rows) |
 | **Font** | Board font (AlphaDG recommended) |
@@ -104,6 +107,9 @@ python fen2rtf.py input.pgn [options]
 | `--answers-title TEXT` | `Solutions` | Answers heading |
 | `--answers-cols N` | `1` | Answer columns (1 or 2) |
 | `--figurine-font NAME` | `Zurich` | Figurine font for answers |
+| `--from N` | — | First position to include (1-based) |
+| `--to N` | — | Last position to include (1-based) |
+| `--no-renumber` | — | Keep original position numbers instead of renumbering from 1 |
 | `--version` | — | Print version and exit |
 | `--gui` | — | Launch GUI |
 

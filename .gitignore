@@ -13,6 +13,10 @@ venv/
 build/
 dist/
 
+# Release archives and bundled instruction (go to GitHub Releases, not repo)
+*.zip
+Инструкция.html
+
 # Auto-generated patched fonts
 Fonts/*_patch.ttf
 

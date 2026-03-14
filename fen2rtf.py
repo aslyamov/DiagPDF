@@ -190,6 +190,7 @@ T: dict[str, tuple] = {
                          [('PDF файлы', '*.pdf'), ('Все файлы', '*.*')]),
     'pos_from_lbl':     ('Positions',                    'Позиции'),
     'pos_to_lbl':       ('to',                           'по'),
+    'renumber_lbl':     ('Start numbers from 1',         'Нумерация с 1'),
     'err_range':        ('No positions in selected range.', 'Нет позиций в выбранном диапазоне.'),
     'err_not_found':    ('Input file not found:\n{}',    'Файл не найден:\n{}'),
     'err_unknown':      ('Unknown file type: {}',        'Неизвестный тип файла: {}'),
@@ -700,6 +701,7 @@ def generate_pdf(positions: list[PositionDict], opts: dict, out_path, progress=N
     figurine_font   = opts.get('figurine_font', 'Zurich' if 'Zurich' in FIGURINE_NAMES else (FIGURINE_NAMES[0] if FIGURINE_NAMES else ''))
     answers_title   = opts.get('answers_title', 'Solutions')
     answers_cols    = min(max(1, int(opts.get('answers_cols', 1))), 2)
+    number_offset   = int(opts.get('number_offset', 0))
 
     script_dir = _resource('.')   # works in both .py and frozen .exe
     fm = FontManager(script_dir)
@@ -802,7 +804,7 @@ def generate_pdf(positions: list[PositionDict], opts: dict, out_path, progress=N
 
         # ── Title (above diagram) ─────────────────────────────────────────────
         fen     = pos.get('fen', '').strip()
-        num     = pos_idx + 1
+        num     = pos_idx + 1 + number_offset
         title = _make_title(pos, num, title_template, title_mode, title_custom)
 
         _side = parse_fen(fen)[1] if (lichess_link or lines_count > 0) else ''
@@ -1099,6 +1101,7 @@ def run_gui():
     v_fig_font      = tk.StringVar(value=cfg.get('figurine_font', 'Zurich' if 'Zurich' in FIGURINE_NAMES else (FIGURINE_NAMES[0] if FIGURINE_NAMES else '')))
     v_pos_from      = tk.IntVar(value=0)
     v_pos_to        = tk.IntVar(value=0)
+    v_renumber      = tk.BooleanVar(value=True)
     v_status        = tk.StringVar(value='')
 
     widgets: dict[str, Any] = {}
@@ -1109,8 +1112,9 @@ def run_gui():
             return key
         return entry[0] if lang == 'en' else entry[1]
 
-    _last_pdf:  Path = Path()
-    _generated: bool = False   # True after successful generation
+    _last_pdf:   Path = Path()
+    _generated:  bool = False   # True after successful generation
+    _total_pos:  int  = 0       # position count of last loaded file
 
     def set_status(msg: str, ok: bool = True) -> None:
         v_status.set(msg)
@@ -1156,16 +1160,42 @@ def run_gui():
         state = 'normal' if v_input.get().strip() else 'disabled'
         widgets['convert'].config(state=state)
 
+    def _update_pos_range(content: str, ext: str) -> None:
+        """Parse file content and update the from/to spinboxes with the total count."""
+        nonlocal _total_pos
+        try:
+            if ext == '.pgn':
+                _positions = parse_pgn(content)
+            elif ext == '.fen':
+                _positions = parse_fen_file(content)
+            elif ext == '.epd':
+                _positions = parse_epd(content)
+            else:
+                return
+            _total_pos = len(_positions)
+        except Exception:
+            _total_pos = 0
+        if _total_pos > 0:
+            v_pos_from.set(1)
+            v_pos_to.set(_total_pos)
+            try:
+                spb_pos_from.config(**{'from': 1, 'to': _total_pos})  # type: ignore[call-overload]
+                spb_pos_to.config(**{'from': 1, 'to': _total_pos})    # type: ignore[call-overload]
+            except Exception:
+                pass
+
     def browse_input() -> None:
         f = filedialog.askopenfilename(title=t('open_title'), filetypes=t('open_types'))
         if f:
             v_input.set(str(Path(f)))
             v_output.set(str(Path(f).with_suffix('.pdf')))
+            _has_ch = False
             try:
                 _content = Path(f).read_text(encoding='utf-8-sig', errors='replace')
                 _has_ch = bool(re.search(r'^\[Chapter\s+"[^"]+"\]', _content, re.MULTILINE))
             except Exception:
-                _has_ch = False
+                _content = ''
+            _update_pos_range(_content, Path(f).suffix.lower())
             v_header.set('{chapter}' if _has_ch else Path(f).stem)
 
     def browse_output() -> None:
@@ -1199,6 +1229,7 @@ def run_gui():
                 return
             pos_from = v_pos_from.get()
             pos_to   = v_pos_to.get()
+            number_offset = 0
             if pos_from > 0 or pos_to > 0:
                 start = max(0, pos_from - 1) if pos_from > 0 else 0
                 end   = pos_to if pos_to > 0 else None
@@ -1206,6 +1237,8 @@ def run_gui():
                 if not positions:
                     messagebox.showerror('Error', t('err_range'))
                     return
+                if not v_renumber.get():
+                    number_offset = start
             orient = v_orient.get()
             opts = {
                 'layout_idx':  v_layout.get(),
@@ -1228,6 +1261,7 @@ def run_gui():
                 'answers_title':   v_answers_title.get(),
                 'answers_cols':    v_answers_cols.get(),
                 'figurine_font':   v_fig_font.get(),
+                'number_offset':   number_offset,
             }
             def on_progress(pct: int) -> None:
                 set_status(f'{pct}%')
@@ -1293,13 +1327,16 @@ def run_gui():
     widgets['pos_from_lbl'] = lbl
     range_fr = ttk.Frame(files_fr)
     range_fr.grid(row=2, column=1, sticky='w', pady=(4, 0))
-    ttk.Spinbox(range_fr, textvariable=v_pos_from, from_=0, to=9999, width=6,
-                ).pack(side='left', padx=(0, 6))
+    spb_pos_from = ttk.Spinbox(range_fr, textvariable=v_pos_from, from_=0, to=9999, width=6)
+    spb_pos_from.pack(side='left', padx=(0, 6))
     pos_to_lbl = ttk.Label(range_fr, anchor='w')
     pos_to_lbl.pack(side='left', padx=(0, 6))
     widgets['pos_to_lbl'] = pos_to_lbl
-    ttk.Spinbox(range_fr, textvariable=v_pos_to, from_=0, to=9999, width=6,
-                ).pack(side='left')
+    spb_pos_to = ttk.Spinbox(range_fr, textvariable=v_pos_to, from_=0, to=9999, width=6)
+    spb_pos_to.pack(side='left', padx=(0, 10))
+    cb = ttk.Checkbutton(range_fr, variable=v_renumber)
+    cb.pack(side='left', padx=(0, 4))
+    widgets['renumber_lbl'] = cb
 
     # ── PAGE ───────────────────────────────────────────────────────────────────
     section('section_page')
@@ -1548,6 +1585,8 @@ def main():
                         help='Start from position N (1-based, default: 1)')
     parser.add_argument('--to', dest='pos_to', type=int, default=0, metavar='N',
                         help='End at position N inclusive (default: last)')
+    parser.add_argument('--keep-numbers', action='store_true',
+                        help='Keep original position numbers instead of renumbering from 1')
     parser.add_argument('--gui', action='store_true', help='Launch GUI')
 
     args = parser.parse_args()
@@ -1583,13 +1622,16 @@ def main():
     if not positions:
         print('Warning: no positions found.', file=sys.stderr)
 
+    number_offset = 0
     if args.pos_from > 0 or args.pos_to > 0:
         start = max(0, args.pos_from - 1) if args.pos_from > 0 else 0
         end   = args.pos_to if args.pos_to > 0 else None
         positions = positions[start:end]
         if not positions:
-            print(f'Warning: no positions in selected range.', file=sys.stderr)
+            print('Warning: no positions in selected range.', file=sys.stderr)
             sys.exit(1)
+        if args.keep_numbers:
+            number_offset = start
 
     opts = {
         'layout_idx':  max(0, min(args.layout, len(LAYOUTS) - 1)),
@@ -1612,6 +1654,7 @@ def main():
         'answers_title':   args.answers_title,
         'answers_cols':    args.answers_cols,
         'figurine_font':   args.figurine_font,
+        'number_offset':   number_offset,
     }
 
     try:
